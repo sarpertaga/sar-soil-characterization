@@ -192,25 +192,39 @@ jupyter notebook notebooks/01_v1_exploratory_report.ipynb
 ```
 sar-soil-characterization/
 ├── config/
-│   ├── aoi/konya.yml              # AOI bounding box + season dates
-│   └── pipelines/v1.yml           # Pipeline parameters
+│   ├── aoi/konya.yml                  # AOI bounding box + season dates
+│   └── pipelines/
+│       ├── v1.yml                     # V1 pipeline parameters
+│       └── v2.yml                     # V2 pipeline parameters
 ├── src/soilgeo/
-│   ├── acquisition/sentinel_hub.py  # Sentinel Hub API client (S1 + DEM)
-│   ├── sar/evalscripts.py           # JS evalscripts (VV+VH median, DEM)
-│   ├── terrain/derivatives.py       # gdaldem wrappers
-│   ├── hydrology/whitebox.py        # WhiteboxTools (TWI, SPI)
-│   ├── indices/sar.py               # VV/VH ratio, NDDI
+│   ├── acquisition/
+│   │   ├── sentinel_hub.py            # Sentinel Hub API client (S1 + DEM)
+│   │   ├── sentinel2.py               # S2 L2A bare-soil fetch (3×3 tiled)
+│   │   └── soilgrids.py               # SoilGrids v2.0 WCS downloader
+│   ├── sar/evalscripts.py             # JS evalscripts (S1, DEM, S2 bare-soil)
+│   ├── terrain/derivatives.py         # gdaldem wrappers
+│   ├── hydrology/whitebox.py          # WhiteboxTools (TWI, SPI, flow accum.)
+│   ├── indices/
+│   │   ├── sar.py                     # VV/VH ratio, NDDI
+│   │   └── optical.py                 # BSI, Clay Index, NDVI, NDWI, Iron Oxide
+│   ├── modelling/
+│   │   ├── features.py                # Feature matrix builder (250m agg. + 10m pred.)
+│   │   └── regression.py             # Random Forest regression + CV metrics
 │   ├── analysis/
-│   │   ├── classification.py        # k-means Surface Response Classes
-│   │   ├── statistics.py            # Kruskal-Wallis, Spearman
-│   │   └── report.py                # Stats analysis orchestrator
-│   ├── products/cog.py              # COG writer, catalog, risk index
-│   └── utils/                       # logging, config, geo helpers
-├── pipelines/run_v1.py              # CLI entry point (resumable, stage-by-stage)
+│   │   ├── classification.py          # k-means Surface Response Classes
+│   │   ├── statistics.py              # Kruskal-Wallis, Spearman
+│   │   └── report.py                  # Stats analysis orchestrator
+│   ├── products/cog.py                # COG writer, catalog, risk index
+│   └── utils/                         # logging, config, geo helpers
+├── pipelines/
+│   ├── run_v1.py                      # V1 CLI (resumable, stage-by-stage)
+│   └── run_v2.py                      # V2 CLI (resumable, stage-by-stage)
 ├── notebooks/
-│   ├── 01_v1_exploratory_report.ipynb
-│   └── visualize_v1.py
-└── tests/unit/                      # 27 unit tests
+│   ├── 01_v1_exploratory_report.ipynb # V1 analysis report
+│   ├── 02_v2_soil_modelling_report.ipynb # V2 ML report + feature importance
+│   ├── cdse_start.ipynb               # CDSE JupyterHub — cloud-native execution
+│   └── visualize_v1.py                # Interactive V1 visualizations
+└── tests/unit/                        # 27 unit tests
 ```
 
 ---
@@ -220,11 +234,14 @@ sar-soil-characterization/
 | Layer | Libraries |
 |---|---|
 | SAR / EO | Sentinel Hub Python SDK, Copernicus CDSE |
+| Optical | Sentinel-2 L2A (CDSE Processing API) |
+| Ground truth | SoilGrids v2.0 WCS (ISRIC) |
 | Terrain | GDAL / gdaldem |
 | Hydrology | WhiteboxTools |
 | Raster I/O | rasterio, rioxarray, xarray |
 | Geospatial | geopandas, shapely, pyproj |
 | ML / Stats | scikit-learn, scipy |
+| Notebooks | Jupyter, matplotlib |
 | Testing | pytest, ruff |
 
 ---
