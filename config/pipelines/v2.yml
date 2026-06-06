@@ -1,0 +1,41 @@
+version: "v2"
+aoi_config: "config/aoi/konya.yml"
+
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+  log_dir: "logs"
+
+sentinel2:
+  # Dry season: crops harvested, soil most exposed → best bare-soil composite
+  bare_soil_season:
+    start: "2024-07-01"
+    end:   "2024-09-30"
+  ndvi_threshold: 0.4       # pixels with NDVI > this are excluded from composite
+  resolution_m: 10
+
+soilgrids:
+  properties: ["clay", "sand", "soc"]
+  depth: "0-5cm"
+  # Native units: clay/sand in g/kg, soc in dg/kg
+
+modelling:
+  feature_names:
+    - vv_wet
+    - vh_wet
+    - vv_dry
+    - vh_dry
+    - nddi
+    - slope
+    - twi
+    - curvature
+    - bsi
+    - clay_index
+    - ndvi
+    - ndwi
+    - iron_oxide
+  random_forest:
+    n_estimators: 200
+    cv_folds: 5
+    random_state: 42
