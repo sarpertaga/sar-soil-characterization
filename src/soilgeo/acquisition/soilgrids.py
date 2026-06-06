@@ -1,7 +1,7 @@
 """Download SoilGrids v2.0 rasters via ISRIC WCS for a given bbox."""
-import urllib.request
-import urllib.parse
 from pathlib import Path
+
+import requests
 
 from soilgeo.utils.logging import get_logger
 
@@ -50,19 +50,15 @@ def build_wcs_url(
         "SUBSET": [f"X({west},{east})", f"Y({south},{north})"],
     }
     # urllib.parse.urlencode doesn't handle repeated keys well; build manually
-    base = f"{_WCS_BASE}?map=/map/{map_file}"
-    qs = (
-        "&SERVICE=WCS"
-        "&VERSION=2.0.1"
-        "&REQUEST=GetCoverage"
+    return (
+        f"{_WCS_BASE}?map=/map/{map_file}"
+        f"&SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage"
         f"&COVERAGEID={coverage_id}"
-        "&FORMAT=image/tiff"
-        "&GEOTIFF:OVERVIEW=false"
-        "&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/4326"
+        f"&FORMAT=image/tiff"
+        f"&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/4326"
         f"&SUBSET=X({west},{east})"
         f"&SUBSET=Y({south},{north})"
     )
-    return base + qs
 
 
 def download_soilgrids(
@@ -103,8 +99,10 @@ def download_soilgrids(
         )
         log.info("Downloading SoilGrids %s %s …", prop, depth)
         try:
-            urllib.request.urlretrieve(url, out)
-            log.info("  → saved: %s", out.name)
+            resp = requests.get(url, timeout=60, headers={"User-Agent": "soilgeo/2.0"})
+            resp.raise_for_status()
+            out.write_bytes(resp.content)
+            log.info("  → saved: %s (%.0f KB)", out.name, len(resp.content) / 1024)
             paths[prop] = out
         except Exception as exc:
             log.error("Failed to download SoilGrids %s: %s", prop, exc)

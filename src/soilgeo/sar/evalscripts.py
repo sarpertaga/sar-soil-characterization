@@ -65,7 +65,8 @@ function setup() {
     return {
         input: [{
             bands: ["B02","B03","B04","B08","B8A","B11","B12","SCL","dataMask"],
-            units: "REFLECTANCE"
+            units: ["REFLECTANCE","REFLECTANCE","REFLECTANCE","REFLECTANCE",
+                    "REFLECTANCE","REFLECTANCE","REFLECTANCE","DN","DN"]
         }],
         output: { bands: 8, sampleType: "FLOAT32" },
         mosaicking: "ORBIT"
