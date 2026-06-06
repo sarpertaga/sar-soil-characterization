@@ -12,7 +12,7 @@ A geospatial intelligence framework that characterizes soil surface conditions a
 | Version | Theme | Status |
 |---|---|---|
 | **V1** | Exploratory soil characterization | ✅ Complete |
-| **V2** | Soil property modelling (clay, SOC, sand via ML) | 📋 Planned |
+| **V2** | Soil property modelling (clay, SOC, sand via ML) | ✅ Complete |
 | **V3** | GeoAI — time-series SAR + deep learning | 📋 Planned |
 | **V4** | Interactive soil intelligence platform | 📋 Planned |
 
@@ -78,6 +78,72 @@ NDDI = (σ_wet − σ_dry) / (σ_wet + σ_dry)   ∈ [−1, 1]
 
 Positive → wet season backscatter dominant (soil moisture / winter crop)  
 Negative → dry season backscatter dominant (summer crop volume scattering / bare soil)
+
+---
+
+## V2 — Soil Property Modelling
+
+### What it does
+
+V2 extends V1 by adding Sentinel-2 optical features and SoilGrids ground truth
+to train Random Forest models that predict soil properties at 10 m resolution.
+
+```
+V1 feature stack (S1 VV/VH/NDDI + TWI + slope + curvature)
+  +
+Sentinel-2 L2A bare-soil composite (Jul–Sep 2024, cloud-masked, NDVI < 0.4)
+  → BSI · Clay Index · NDVI · NDWI · Iron Oxide
+  +
+SoilGrids v2.0 (clay · sand · SOC at 250 m)
+           ↓
+  Feature matrix (7 079 pixels × 13 features)
+  Random Forest regression — 5-fold CV
+           ↓
+  Outputs (data/processed/)
+  ├── clay_10m_konya.tif      (g/kg)
+  ├── sand_10m_konya.tif      (g/kg)
+  ├── soc_10m_konya.tif       (dg/kg)
+  └── v2_metrics.json
+```
+
+### Key results
+
+| Target | R² | RMSE | Top feature |
+|---|---|---|---|
+| Clay | 0.49 | 13.98 g/kg | Iron Oxide (0.22) |
+| Sand | 0.43 | 8.28 g/kg | BSI (0.19) |
+| SOC | 0.23 | 29.42 dg/kg | VV wet (0.11) |
+
+**Konya soil profile:** ~37.7% clay, ~16.7% sand — heavy lacustrine clay plain.  
+Iron Oxide ratio (S2 B04/B02) is the strongest predictor for clay content,
+consistent with the iron-rich, reddish Konya plain soils.
+
+### Pipeline stages
+
+```
+fetch_s2    → Sentinel-2 L2A bare-soil composite (3×3 tiled fetch)
+s2_indices  → BSI, Clay Index, NDVI, NDWI, Iron Oxide
+soilgrids   → Download clay/sand/SOC from ISRIC WCS
+features    → Aggregate features to 250 m, build training matrix
+train       → Random Forest (200 trees, 5-fold CV) per target
+predict     → Apply model at 10 m, write GeoTIFFs
+catalog     → Update product catalog
+```
+
+### Run V2 pipeline
+
+```bash
+python pipelines/run_v2.py
+# or stage by stage:
+python pipelines/run_v2.py --stages fetch_s2,s2_indices
+python pipelines/run_v2.py --stages soilgrids,features,train,predict
+```
+
+### Open the report
+
+```bash
+jupyter notebook notebooks/02_v2_soil_modelling_report.ipynb
+```
 
 ---
 
