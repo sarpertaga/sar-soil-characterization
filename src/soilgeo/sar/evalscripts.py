@@ -1,4 +1,17 @@
-"""Sentinel Hub JS evalscripts for Sentinel-1 SAR backscatter."""
+"""Sentinel Hub JS evalscripts for Sentinel-1 SAR and Copernicus DEM."""
+
+DEM_ELEVATION = """
+//VERSION=3
+function setup() {
+    return {
+        input: [{ bands: ["DEM"] }],
+        output: { bands: 1, sampleType: "FLOAT32" }
+    };
+}
+function evaluatePixel(sample) {
+    return [sample.DEM];
+}
+"""
 
 S1_VV_VH_MEDIAN_DB = """
 //VERSION=3

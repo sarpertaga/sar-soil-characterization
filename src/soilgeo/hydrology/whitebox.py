@@ -46,7 +46,7 @@ def compute_twi_spi(
     """Compute TWI = ln(a/tanβ) and SPI = a·tanβ."""
     work_dir = work_dir or twi_output.parent
     work_dir.mkdir(parents=True, exist_ok=True)
-    fa_path = work_dir / "_flow_acc.tif"
+    fa_path = work_dir / "flow_acc.tif"
     compute_flow_accumulation(dem_path, fa_path, work_dir)
 
     if not twi_output.exists():

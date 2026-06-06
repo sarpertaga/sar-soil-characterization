@@ -53,3 +53,27 @@ def bbox_to_utm(west: float, south: float, east: float, north: float, crs: str) 
 def read_band(path: Path, band: int = 1) -> np.ndarray:
     with rasterio.open(path) as src:
         return src.read(band).astype(np.float32)
+
+
+def resample_to_match(src_path: Path, ref_path: Path, out_path: Path) -> Path:
+    """Reproject + resample src_path to exactly match ref_path grid."""
+    if out_path.exists():
+        return out_path
+    from rasterio.warp import reproject, Resampling
+    with rasterio.open(ref_path) as ref:
+        ref_profile = ref.profile.copy()
+    with rasterio.open(src_path) as src:
+        profile = ref_profile.copy()
+        profile.update(dtype="float32", count=1, nodata=NODATA, compress="deflate")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(out_path, "w", **profile) as dst:
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=rasterio.band(dst, 1),
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=dst.transform,
+                dst_crs=dst.crs,
+                resampling=Resampling.bilinear,
+            )
+    return out_path
