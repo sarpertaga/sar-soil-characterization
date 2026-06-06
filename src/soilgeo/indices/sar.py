@@ -34,44 +34,54 @@ def compute_vv_vh_ratio(vv_path: Path, vh_path: Path, output_path: Path) -> Path
     return output_path
 
 
-def compute_moisture_index(
-    scene_path: Path,
-    dry_path: Path,
+def compute_nddi(
     wet_path: Path,
+    dry_path: Path,
     output_path: Path,
 ) -> Path:
     """
-    SAR Moisture Index: MI = (σ_t − σ_dry) / (σ_wet − σ_dry)
-    Output clamped to [0, 1].
+    Normalized Difference Dryness Index (NDDI) from two VV composites.
+    Computed in linear power scale to be physically meaningful:
+
+        σ_linear = 10^(VV_dB / 10)
+        NDDI = (σ_wet − σ_dry) / (σ_wet + σ_dry)   ∈ [-1, 1]
+
+    Positive → wet season has higher backscatter (soil absorbed water).
+    Negative → dry season has higher backscatter (bare soil, specular).
+    ~0       → no seasonal difference.
     """
     if output_path.exists():
-        log.info("Skipping moisture_index (exists)")
+        log.info("Skipping nddi (exists)")
         return output_path
 
-    with rasterio.open(scene_path) as src:
-        sigma_t = src.read(1).astype(np.float32)
+    with rasterio.open(wet_path) as src:
+        vv_wet_db = src.read(1).astype(np.float32)
         profile = src.profile
         nd = src.nodata or NODATA
     with rasterio.open(dry_path) as src:
-        sigma_dry = src.read(1).astype(np.float32)
+        vv_dry_db = src.read(1).astype(np.float32)
         nd_dry = src.nodata or NODATA
-    with rasterio.open(wet_path) as src:
-        sigma_wet = src.read(1).astype(np.float32)
-        nd_wet = src.nodata or NODATA
 
-    mask = (sigma_t == nd) | (sigma_dry == nd_dry) | (sigma_wet == nd_wet)
-    denom = sigma_wet - sigma_dry
+    mask = (vv_wet_db == nd) | (vv_dry_db == nd_dry)
+
+    # dB → linear power
+    wet_lin = np.where(mask, np.nan, 10.0 ** (vv_wet_db / 10.0))
+    dry_lin = np.where(mask, np.nan, 10.0 ** (vv_dry_db / 10.0))
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        mi = np.where(
-            mask | (np.abs(denom) < 1e-6),
+        denom = wet_lin + dry_lin
+        nddi = np.where(
+            mask | (denom < 1e-12),
             NODATA,
-            np.clip((sigma_t - sigma_dry) / denom, 0.0, 1.0),
+            (wet_lin - dry_lin) / denom,
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     profile.update(dtype="float32", count=1, nodata=NODATA, compress="deflate")
     with rasterio.open(output_path, "w", **profile) as dst:
-        dst.write(mi.astype(np.float32), 1)
-    log.info("Moisture index written: %s", output_path.name)
+        dst.write(nddi.astype(np.float32), 1)
+
+    valid = nddi[nddi != NODATA]
+    log.info("NDDI written: %s | range [%.3f, %.3f] mean=%.3f",
+             output_path.name, float(np.nanmin(valid)), float(np.nanmax(valid)), float(np.nanmean(valid)))
     return output_path

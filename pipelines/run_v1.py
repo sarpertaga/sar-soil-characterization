@@ -104,7 +104,7 @@ def run(args):
     # ── indices ─────────────────────────────────────────────────────────────
     if "indices" in stages:
         log.info("--- Stage: indices ---")
-        from soilgeo.indices.sar import compute_vv_vh_ratio, compute_moisture_index
+        from soilgeo.indices.sar import compute_vv_vh_ratio, compute_nddi
         s1 = interim / "s1"
         idx = interim / "indices"
 
@@ -126,27 +126,27 @@ def run(args):
 
         compute_vv_vh_ratio(vv_wet, vh_wet, idx / "vv_vh_ratio_wet.tif")
         compute_vv_vh_ratio(vv_dry, vh_dry, idx / "vv_vh_ratio_dry.tif")
-        compute_moisture_index(vv_wet, vv_dry, vv_wet, idx / "moisture_index.tif")
+        compute_nddi(vv_wet, vv_dry, idx / "nddi.tif")
 
     # ── classify ────────────────────────────────────────────────────────────
     if "classify" in stages:
         log.info("--- Stage: classify ---")
         from soilgeo.analysis.classification import classify_surface_response
         from soilgeo.utils.geo import resample_to_match
-        mi_path = interim / "indices" / "moisture_index.tif"
+        nddi_path = interim / "indices" / "nddi.tif"
         twi_path = interim / "hydrology" / "twi.tif"
         slope_path = interim / "terrain" / "slope.tif"
 
-        # Resample terrain layers to match S1 grid (MI is the reference)
+        # Resample terrain layers to match S1 grid (NDDI is the reference)
         twi_r_path = interim / "hydrology" / "twi_resampled.tif"
         slope_r_path = interim / "terrain" / "slope_resampled.tif"
-        resample_to_match(twi_path, mi_path, twi_r_path)
-        resample_to_match(slope_path, mi_path, slope_r_path)
+        resample_to_match(twi_path, nddi_path, twi_r_path)
+        resample_to_match(slope_path, nddi_path, slope_r_path)
 
-        if not all(p.exists() for p in [mi_path, twi_r_path, slope_r_path]):
+        if not all(p.exists() for p in [nddi_path, twi_r_path, slope_r_path]):
             log.warning("Missing inputs for classify — skipping")
         else:
-            with rasterio.open(mi_path) as src:
+            with rasterio.open(nddi_path) as src:
                 mi = src.read(1).flatten().astype(np.float32)
                 profile = src.profile
                 h, w = src.height, src.width
@@ -177,12 +177,13 @@ def run(args):
         mi_path = interim / "indices" / "moisture_index.tif"
         fa_path = interim / "hydrology" / "flow_acc.tif"
         slope_path = interim / "terrain" / "slope.tif"
+        nddi_path = interim / "indices" / "nddi.tif"
         fa_r_path = interim / "hydrology" / "flow_acc_resampled.tif"
         slope_risk_path = interim / "terrain" / "slope_resampled.tif"
-        resample_to_match(fa_path, mi_path, fa_r_path)
-        if all(p.exists() for p in [mi_path, fa_r_path, slope_risk_path]):
+        resample_to_match(fa_path, nddi_path, fa_r_path)
+        if all(p.exists() for p in [nddi_path, fa_r_path, slope_risk_path]):
             compute_construction_risk(
-                mi_path=mi_path,
+                mi_path=nddi_path,
                 flow_acc_path=fa_r_path,
                 slope_path=slope_risk_path,
                 output_path=processed / f"construction_risk_{aoi.name}.tif",
