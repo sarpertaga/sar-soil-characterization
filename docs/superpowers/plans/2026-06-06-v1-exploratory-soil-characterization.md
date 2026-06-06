@@ -63,13 +63,11 @@ sar-soil-geoai/
 │   │   └── whitebox.py                  # WhiteboxTools: TWI, SPI, flow acc, watersheds
 │   ├── indices/
 │   │   ├── __init__.py
-│   │   ├── sar.py                       # VV/VH ratio, SAR Moisture Index
-│   │   └── hardness.py                  # 7-class hardness (ported from pvxai, 209 pile tests)
+│   │   └── sar.py                       # VV/VH ratio, SAR Moisture Index
 │   ├── analysis/
 │   │   ├── __init__.py
 │   │   ├── statistics.py                # Kruskal-Wallis, Spearman, stratified stats
-│   │   ├── temporal.py                  # Median, MAD, rCV, ProxyCoherence (ported from pvxai)
-│   │   └── classification.py            # Surface Response Classes via k-means
+│   │   └── classification.py            # Surface Response Classes via k-means (literature-based)
 │   └── products/
 │       ├── __init__.py
 │       └── cog.py                       # COG writing + provenance sidecar JSON
@@ -1056,13 +1054,12 @@ sar-soil-geoai/
 
 ---
 
-## Phase 4 — Soil Hardness (pvxai port)
+## Phase 4 — SAR Indices
 
-### Task 7: Port pvxai SoilHardnessAnalyzer + TemporalStatistics to Python
+### Task 7: VV/VH ratio + SAR Moisture Index
 
 **Files:**
-- Create: `src/soilgeo/indices/hardness.py`
-- Create: `src/soilgeo/analysis/temporal.py`
+- Create: `src/soilgeo/indices/sar.py`
 - Create: `tests/unit/test_sar_indices.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -1070,42 +1067,39 @@ sar-soil-geoai/
   Create `tests/unit/test_sar_indices.py`:
   ```python
   import numpy as np
-  from soilgeo.indices.hardness import classify_hardness, HardnessClass
-  from soilgeo.analysis.temporal import proxy_coherence, temporal_median
+  import rasterio
+  from soilgeo.indices.sar import compute_vv_vh_ratio, compute_moisture_index
 
-  def test_classify_veryhard():
-      assert classify_hardness(-4.0) == HardnessClass.VERY_HARD
+  def test_vv_vh_ratio_is_difference_in_db(tmp_path, synthetic_10m_raster):
+      vv_path = synthetic_10m_raster
+      vh_path = tmp_path / "vh.tif"
+      with rasterio.open(vv_path) as src:
+          vv_data = src.read(1)
+          profile = src.profile
+      with rasterio.open(vh_path, "w", **profile) as dst:
+          dst.write(vv_data - 5.0, 1)
+      ratio_path = tmp_path / "ratio.tif"
+      compute_vv_vh_ratio(vv_path, vh_path, ratio_path)
+      with rasterio.open(ratio_path) as src:
+          ratio = src.read(1)
+      np.testing.assert_allclose(ratio[ratio != -9999.0], 5.0, atol=1e-3)
 
-  def test_classify_firm():
-      assert classify_hardness(-10.0) == HardnessClass.FIRM
-
-  def test_classify_verysoft():
-      assert classify_hardness(-22.0) == HardnessClass.VERY_SOFT
-
-  def test_classify_nodata():
-      assert classify_hardness(-9999.0) == HardnessClass.NO_DATA
-
-  def test_classify_array_shape():
-      vv = np.array([-4.0, -10.0, -15.0, -22.0, -9999.0])
-      result = classify_hardness(vv)
-      assert result.shape == vv.shape
-
-  def test_proxy_coherence_stable_signal():
-      # Identical values → rCV=0 → coherence=1.0
-      stack = np.array([[-10.0, -10.0, -10.0, -10.0, -10.0]])
-      coh = proxy_coherence(stack)
-      assert abs(coh[0] - 1.0) < 0.01
-
-  def test_proxy_coherence_range():
-      rng = np.random.default_rng(0)
-      stack = rng.uniform(-20, -5, (100, 6))
-      coh = proxy_coherence(stack)
-      assert (coh >= 0).all() and (coh <= 1).all()
-
-  def test_temporal_median_ignores_nodata():
-      stack = np.array([[-10.0, -12.0, -9999.0, -11.0]])
-      med = temporal_median(stack)
-      assert abs(med[0] - (-11.0)) < 0.1
+  def test_moisture_index_midpoint(tmp_path, synthetic_10m_raster):
+      with rasterio.open(synthetic_10m_raster) as src:
+          data = src.read(1)
+          profile = src.profile
+      dry = tmp_path / "dry.tif"
+      wet = tmp_path / "wet.tif"
+      scene = tmp_path / "scene.tif"
+      for p, val in [(dry, -20.0), (wet, -10.0), (scene, -15.0)]:
+          with rasterio.open(p, "w", **profile) as dst:
+              dst.write(np.full_like(data, val), 1)
+      mi_path = tmp_path / "mi.tif"
+      compute_moisture_index(scene, dry, wet, mi_path)
+      with rasterio.open(mi_path) as src:
+          mi = src.read(1)
+      valid = mi[mi != -9999.0]
+      np.testing.assert_allclose(valid.mean(), 0.5, atol=0.05)
   ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1114,156 +1108,86 @@ sar-soil-geoai/
   pytest tests/unit/test_sar_indices.py -v
   ```
 
-- [ ] **Step 3: Implement `src/soilgeo/indices/hardness.py`**
-
-  Port of `SoilHardnessAnalyzer.cs` — thresholds calibrated with 209 pile tests (Ağrı + Kars, Dec 2024).
+- [ ] **Step 3: Implement `src/soilgeo/indices/sar.py`**
 
   ```python
-  """7-class SAR soil hardness classification — ported from pvxai SoilHardnessAnalyzer."""
-  from enum import IntEnum
-
+  """SAR indices: VV/VH ratio and SAR Moisture Index."""
+  from pathlib import Path
   import numpy as np
+  import rasterio
+  from soilgeo.utils.logging import get_logger
 
+  log = get_logger(__name__)
   NODATA = -9999.0
 
 
-  class HardnessClass(IntEnum):
-      NO_DATA    = 0
-      VERY_SOFT  = 1   # < -20 dB  — water, wetland
-      SOFT       = 2   # -20→-17   — dry sand, loose material
-      MEDIUM_SOFT= 3   # -17→-14   — dry loose soil, agricultural
-      MEDIUM_FIRM= 4   # -14→-11   — moist soil, moderately compacted
-      FIRM       = 5   # -11→-8    — compacted soil, gravel roads
-      HARD       = 6   # -8→-5     — limestone, gravel, rock
-      VERY_HARD  = 7   # ≥ -5      — concrete, asphalt, metal
+  def compute_vv_vh_ratio(vv_path: Path, vh_path: Path, output_path: Path) -> Path:
+      """VV/VH ratio in dB = VV_dB − VH_dB."""
+      if output_path.exists():
+          return output_path
+      with rasterio.open(vv_path) as src:
+          vv = src.read(1).astype(np.float32)
+          profile = src.profile
+          nd = src.nodata or NODATA
+      with rasterio.open(vh_path) as src:
+          vh = src.read(1).astype(np.float32)
+      mask = (vv == nd) | (vh == nd)
+      ratio = np.where(mask, NODATA, vv - vh)
+      output_path.parent.mkdir(parents=True, exist_ok=True)
+      profile.update(dtype="float32", count=1, nodata=NODATA, compress="deflate")
+      with rasterio.open(output_path, "w", **profile) as dst:
+          dst.write(ratio, 1)
+      return output_path
 
 
-  CLASS_LABELS = {
-      HardnessClass.NO_DATA:     "No Data",
-      HardnessClass.VERY_SOFT:   "Very Soft",
-      HardnessClass.SOFT:        "Soft",
-      HardnessClass.MEDIUM_SOFT: "Medium-Soft",
-      HardnessClass.MEDIUM_FIRM: "Medium-Firm",
-      HardnessClass.FIRM:        "Firm",
-      HardnessClass.HARD:        "Hard",
-      HardnessClass.VERY_HARD:   "Very Hard",
-  }
-
-  # Pile driving guidance (from pvxai ground truth)
-  PILE_GUIDANCE = {
-      HardnessClass.VERY_HARD:   "Driving: very difficult / Pull-out: excellent",
-      HardnessClass.HARD:        "Driving: difficult / Pull-out: excellent",
-      HardnessClass.FIRM:        "Driving: normal / Pull-out: good",
-      HardnessClass.MEDIUM_FIRM: "Driving: easy / Pull-out: RISKY",
-      HardnessClass.MEDIUM_SOFT: "Driving: easy / Pull-out: weak",
-      HardnessClass.SOFT:        "Driving: very easy / Pull-out: not recommended",
-      HardnessClass.VERY_SOFT:   "Driving: unsuitable / Pull-out: none",
-  }
-
-
-  def classify_hardness(vv_db):
+  def compute_moisture_index(
+      scene_path: Path,
+      dry_path: Path,
+      wet_path: Path,
+      output_path: Path,
+  ) -> Path:
       """
-      Classify VV σ⁰ backscatter (dB) into 7 hardness classes.
-      Accepts scalar float or numpy array.
-      Thresholds: calibrated with 209 pile tests (Ağrı + Kars, Dec 2024).
+      SAR Moisture Index: MI = (σ_t − σ_dry) / (σ_wet − σ_dry)
+      Output clamped to [0, 1].
       """
-      scalar = np.isscalar(vv_db)
-      arr = np.atleast_1d(np.asarray(vv_db, dtype=np.float32))
-
-      out = np.full(arr.shape, HardnessClass.NO_DATA, dtype=np.uint8)
-      valid = arr != NODATA
-
-      out[valid & (arr >= -5)]  = HardnessClass.VERY_HARD
-      out[valid & (arr >= -8)  & (arr < -5)]  = HardnessClass.HARD
-      out[valid & (arr >= -11) & (arr < -8)]  = HardnessClass.FIRM
-      out[valid & (arr >= -14) & (arr < -11)] = HardnessClass.MEDIUM_FIRM
-      out[valid & (arr >= -17) & (arr < -14)] = HardnessClass.MEDIUM_SOFT
-      out[valid & (arr >= -20) & (arr < -17)] = HardnessClass.SOFT
-      out[valid & (arr < -20)]                = HardnessClass.VERY_SOFT
-
-      return int(out[0]) if scalar else out
-
-
-  def classify_hardness_dual_pol(vv_db: np.ndarray, vh_db: np.ndarray) -> np.ndarray:
-      """
-      Advanced classification using VV + VV/VH ratio.
-      Specular surface correction: very smooth surfaces (concrete/asphalt)
-      give low VV due to specular reflection → detected by low local variance.
-      """
-      base = classify_hardness(vv_db)
-      ratio = vv_db - vh_db   # VV/VH ratio in dB
-
-      # Specular reflection: VV < -20 but high ratio + local homogeneity → VeryHard
-      # (local stddev check done externally if needed)
-      specular = (vv_db < -20) & (ratio < 6) & (vv_db != NODATA) & (vh_db != NODATA)
-      base[specular] = HardnessClass.VERY_HARD
-
-      return base
-  ```
-
-- [ ] **Step 4: Implement `src/soilgeo/analysis/temporal.py`**
-
-  Port of `TemporalStatistics.cs` — proxy coherence via rCV.
-
-  ```python
-  """Temporal SAR statistics: median, MAD, rCV, proxy-coherence."""
-  import numpy as np
-
-  NODATA = -9999.0
-
-
-  def temporal_median(stack: np.ndarray, nodata: float = NODATA) -> np.ndarray:
-      """
-      Median along time axis (axis=1) of shape (n_pixels, n_times).
-      Ignores nodata values.
-      """
-      masked = np.where(stack == nodata, np.nan, stack)
-      return np.nanmedian(masked, axis=1).astype(np.float32)
-
-
-  def temporal_mad(stack: np.ndarray, nodata: float = NODATA) -> np.ndarray:
-      """Median Absolute Deviation along time axis."""
-      masked = np.where(stack == nodata, np.nan, stack)
-      med = np.nanmedian(masked, axis=1, keepdims=True)
-      return np.nanmedian(np.abs(masked - med), axis=1).astype(np.float32)
-
-
-  def robust_cv(stack: np.ndarray, nodata: float = NODATA) -> np.ndarray:
-      """
-      Robust Coefficient of Variation: rCV = 1.4826 × MAD / median.
-      Lower = more temporally stable (coherent) signal.
-      """
-      masked = np.where(stack == nodata, np.nan, stack)
-      med = np.nanmedian(masked, axis=1)
-      mad = temporal_mad(stack, nodata)
+      if output_path.exists():
+          return output_path
+      with rasterio.open(scene_path) as src:
+          sigma_t = src.read(1).astype(np.float32)
+          profile = src.profile
+          nd = src.nodata or NODATA
+      with rasterio.open(dry_path) as src:
+          sigma_dry = src.read(1).astype(np.float32)
+      with rasterio.open(wet_path) as src:
+          sigma_wet = src.read(1).astype(np.float32)
+      mask = (sigma_t == nd) | (sigma_dry == nd) | (sigma_wet == nd)
+      denom = sigma_wet - sigma_dry
       with np.errstate(divide="ignore", invalid="ignore"):
-          rcv = np.where(med > 0, 1.4826 * mad / np.maximum(med, 1e-12), np.nan)
-      return rcv.astype(np.float32)
-
-
-  def proxy_coherence(stack: np.ndarray, nodata: float = NODATA) -> np.ndarray:
-      """
-      Proxy-coherence from temporal stability: coh = 1 / (1 + rCV).
-      Range [0, 1] — 1 = perfectly stable, 0 = highly variable.
-      Ported from pvxai TemporalStatistics.CalculateProxyCoherence().
-      """
-      rcv = robust_cv(stack, nodata)
-      coh = 1.0 / (1.0 + np.where(np.isnan(rcv), 1e9, rcv))
-      return coh.astype(np.float32)
+          mi = np.where(
+              mask | (np.abs(denom) < 1e-6),
+              NODATA,
+              np.clip((sigma_t - sigma_dry) / denom, 0.0, 1.0),
+          )
+      output_path.parent.mkdir(parents=True, exist_ok=True)
+      profile.update(dtype="float32", count=1, nodata=NODATA, compress="deflate")
+      with rasterio.open(output_path, "w", **profile) as dst:
+          dst.write(mi.astype(np.float32), 1)
+      log.info("Moisture index written: %s", output_path.name)
+      return output_path
   ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 4: Run tests**
 
   ```bash
   pytest tests/unit/test_sar_indices.py -v
   ```
-  Expected: 8 PASSED
+  Expected: 2 PASSED
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
   ```bash
-  git add src/soilgeo/indices/hardness.py src/soilgeo/analysis/temporal.py tests/unit/test_sar_indices.py
-  git commit -m "feat(indices): 7-class soil hardness + temporal proxy-coherence (ported from pvxai, 209 pile tests)"
+  git add src/soilgeo/indices/sar.py tests/unit/test_sar_indices.py
+  git commit -m "feat(indices): VV/VH ratio and SAR Moisture Index"
   ```
 
 ---
