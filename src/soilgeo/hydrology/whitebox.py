@@ -10,6 +10,9 @@ from soilgeo.utils.logging import get_logger
 log = get_logger(__name__)
 
 NODATA = -9999.0
+# Minimum slope in degrees before tan(β) → 0 causes TWI → ∞
+# Flat Konya plain has mean slope ~1°; floor prevents NaN on pits/flats
+MIN_SLOPE_DEG = 0.1
 
 
 def _get_wbt():
@@ -43,18 +46,15 @@ def compute_twi_spi(
     spi_output: Path,
     work_dir: Path | None = None,
 ) -> tuple[Path, Path]:
-    """Compute TWI = ln(a/tanβ) and SPI = a·tanβ."""
+    """Compute TWI = ln(a/tanβ) and SPI = a·tanβ with slope floor for flat terrain."""
     work_dir = work_dir or twi_output.parent
     work_dir.mkdir(parents=True, exist_ok=True)
     fa_path = work_dir / "flow_acc.tif"
     compute_flow_accumulation(dem_path, fa_path, work_dir)
 
     if not twi_output.exists():
-        log.info("Computing TWI...")
-        wbt = _get_wbt()
-        wbt.work_dir = str(work_dir)
-        wbt.wetness_index(str(fa_path), str(dem_path), str(twi_output))
-        log.info("Written: %s", twi_output.name)
+        log.info("Computing TWI (manual, slope floor=%.2f°)...", MIN_SLOPE_DEG)
+        _compute_twi_manual(dem_path, fa_path, twi_output)
 
     if not spi_output.exists():
         log.info("Computing SPI...")
@@ -63,30 +63,66 @@ def compute_twi_spi(
     return twi_output, spi_output
 
 
-def _compute_spi(dem_path: Path, fa_path: Path, spi_output: Path) -> Path:
-    """SPI = a × tan(β) computed from flow_acc and slope arrays."""
-    slope_path = spi_output.parent / "_slope_for_spi.tif"
-    subprocess.run(
-        ["gdaldem", "slope", str(dem_path), str(slope_path), "-of", "GTiff"],
-        check=True, capture_output=True,
-    )
+def _slope_array(dem_path: Path, work_dir: Path) -> np.ndarray:
+    """Return slope in degrees as float64 array."""
+    slope_path = work_dir / "_slope_twi.tif"
+    if not slope_path.exists():
+        subprocess.run(
+            ["gdaldem", "slope", str(dem_path), str(slope_path), "-of", "GTiff"],
+            check=True, capture_output=True,
+        )
+    with rasterio.open(slope_path) as src:
+        return src.read(1).astype(np.float64)
+
+
+def _compute_twi_manual(dem_path: Path, fa_path: Path, twi_output: Path) -> Path:
+    """
+    TWI = ln(a / tan(β))  — computed from flow accumulation + slope.
+    Applies MIN_SLOPE_DEG floor so flat areas get finite (high) TWI
+    instead of NaN/infinity. This is standard practice for plains.
+    """
     with rasterio.open(fa_path) as src:
         fa = src.read(1).astype(np.float64)
         profile = src.profile
-        nd = src.nodata or NODATA
+        nd_fa = src.nodata if src.nodata is not None else NODATA
 
-    with rasterio.open(slope_path) as src:
-        slope_deg = src.read(1).astype(np.float64)
+    slope_deg = _slope_array(dem_path, fa_path.parent)
 
-    slope_rad = np.radians(slope_deg)
-    tan_slope = np.tan(np.clip(slope_rad, 1e-6, None))
-    spi = fa * tan_slope
+    mask = (fa == nd_fa) | np.isnan(fa) | (fa <= 0)
+    # Apply slope floor: flat pixels get MIN_SLOPE_DEG, not 0
+    slope_floored = np.clip(slope_deg, MIN_SLOPE_DEG, None)
+    tan_slope = np.tan(np.radians(slope_floored))
 
-    mask = (fa == nd) | (slope_deg == NODATA)
-    spi[mask] = NODATA
+    with np.errstate(divide="ignore", invalid="ignore"):
+        twi = np.where(mask, NODATA, np.log(fa / tan_slope))
+
+    twi_output.parent.mkdir(parents=True, exist_ok=True)
+    profile.update(dtype="float32", count=1, nodata=NODATA, compress="deflate")
+    with rasterio.open(twi_output, "w", **profile) as dst:
+        dst.write(twi.astype(np.float32), 1)
+
+    valid = twi[twi != NODATA]
+    log.info("TWI written: %s | range [%.2f, %.2f] mean=%.2f valid=%.1f%%",
+             twi_output.name, valid.min(), valid.max(), valid.mean(),
+             100 * valid.size / twi.size)
+    return twi_output
+
+
+def _compute_spi(dem_path: Path, fa_path: Path, spi_output: Path) -> Path:
+    """SPI = a × tan(β)"""
+    slope_deg = _slope_array(dem_path, fa_path.parent)
+
+    with rasterio.open(fa_path) as src:
+        fa = src.read(1).astype(np.float64)
+        profile = src.profile
+        nd_fa = src.nodata if src.nodata is not None else NODATA
+
+    mask = (fa == nd_fa) | np.isnan(fa)
+    slope_rad = np.radians(np.clip(slope_deg, MIN_SLOPE_DEG, None))
+    spi = np.where(mask, NODATA, fa * np.tan(slope_rad))
 
     spi_output.parent.mkdir(parents=True, exist_ok=True)
-    profile.update(dtype="float32", nodata=NODATA, compress="deflate")
+    profile.update(dtype="float32", count=1, nodata=NODATA, compress="deflate")
     with rasterio.open(spi_output, "w", **profile) as dst:
         dst.write(spi.astype(np.float32), 1)
     log.info("Written: %s", spi_output.name)

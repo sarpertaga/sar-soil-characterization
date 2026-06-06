@@ -27,8 +27,9 @@ ALL_STAGES = [
     "fetch_s1",     # Sentinel-1 wet + dry composites via Sentinel Hub
     "terrain",      # slope, aspect, curvature, hillshade from DEM TIF
     "hydrology",    # TWI, SPI, flow accumulation from DEM TIF
-    "indices",      # VV/VH ratio, SAR Moisture Index
+    "indices",      # VV/VH ratio, NDDI
     "classify",     # Surface Response Classes (k-means)
+    "stats",        # Kruskal-Wallis + Spearman analysis
     "risk",         # Construction Moisture Risk Index
     "catalog",      # Product catalog JSON
 ]
@@ -168,6 +169,30 @@ def run(args):
             with rasterio.open(out, "w", **profile) as dst:
                 dst.write(labels, 1)
             log.info("Surface Response Classes: %s", out.name)
+
+    # ── stats ────────────────────────────────────────────────────────────────
+    if "stats" in stages:
+        log.info("--- Stage: stats ---")
+        from soilgeo.analysis.report import run_stats_analysis
+        from soilgeo.utils.geo import resample_to_match
+        vv_wet_path   = interim / "s1"      / f"s1_vv_{aoi.name}_wet.tif"
+        vv_dry_path   = interim / "s1"      / f"s1_vv_{aoi.name}_dry.tif"
+        nddi_path     = interim / "indices" / "nddi.tif"
+        twi_path      = interim / "hydrology" / "twi.tif"
+        slope_path    = interim / "terrain"   / "slope.tif"
+        twi_r_path    = interim / "hydrology" / "twi_resampled.tif"
+        slope_r_path  = interim / "terrain"   / "slope_resampled.tif"
+        # Ensure resampled versions exist
+        resample_to_match(twi_path, nddi_path, twi_r_path)
+        resample_to_match(slope_path, nddi_path, slope_r_path)
+        run_stats_analysis(
+            vv_wet_path=vv_wet_path,
+            vv_dry_path=vv_dry_path,
+            nddi_path=nddi_path,
+            twi_path=twi_r_path,
+            slope_path=slope_r_path,
+            output_path=processed / "stats_v1.json",
+        )
 
     # ── risk ────────────────────────────────────────────────────────────────
     if "risk" in stages and cfg.construction_risk["enabled"]:
