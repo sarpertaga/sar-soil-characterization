@@ -60,3 +60,9 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
         surface_response_classes=raw["surface_response_classes"],
         construction_risk=raw["construction_risk"],
     )
+
+
+def load_config_dict(path: Path) -> dict:
+    """Load any YAML config as a plain dict with env-var resolution."""
+    with open(path) as f:
+        return _resolve_env_vars(yaml.safe_load(f))

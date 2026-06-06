@@ -12,7 +12,7 @@ A geospatial intelligence framework that characterizes soil surface conditions a
 | Version | Theme | Status |
 |---|---|---|
 | **V1** | Exploratory soil characterization | ✅ Complete |
-| **V2** | Soil property modelling (clay, SOC, sand via ML) | 📋 Planned |
+| **V2** | Soil property modelling (clay, SOC, sand via ML) | ✅ Complete |
 | **V3** | GeoAI — time-series SAR + deep learning | 📋 Planned |
 | **V4** | Interactive soil intelligence platform | 📋 Planned |
 
@@ -81,6 +81,72 @@ Negative → dry season backscatter dominant (summer crop volume scattering / ba
 
 ---
 
+## V2 — Soil Property Modelling
+
+### What it does
+
+V2 extends V1 by adding Sentinel-2 optical features and SoilGrids ground truth
+to train Random Forest models that predict soil properties at 10 m resolution.
+
+```
+V1 feature stack (S1 VV/VH/NDDI + TWI + slope + curvature)
+  +
+Sentinel-2 L2A bare-soil composite (Jul–Sep 2024, cloud-masked, NDVI < 0.4)
+  → BSI · Clay Index · NDVI · NDWI · Iron Oxide
+  +
+SoilGrids v2.0 (clay · sand · SOC at 250 m)
+           ↓
+  Feature matrix (7 079 pixels × 13 features)
+  Random Forest regression — 5-fold CV
+           ↓
+  Outputs (data/processed/)
+  ├── clay_10m_konya.tif      (g/kg)
+  ├── sand_10m_konya.tif      (g/kg)
+  ├── soc_10m_konya.tif       (dg/kg)
+  └── v2_metrics.json
+```
+
+### Key results
+
+| Target | R² | RMSE | Top feature |
+|---|---|---|---|
+| Clay | 0.49 | 13.98 g/kg | Iron Oxide (0.22) |
+| Sand | 0.43 | 8.28 g/kg | BSI (0.19) |
+| SOC | 0.23 | 29.42 dg/kg | VV wet (0.11) |
+
+**Konya soil profile:** ~37.7% clay, ~16.7% sand — heavy lacustrine clay plain.  
+Iron Oxide ratio (S2 B04/B02) is the strongest predictor for clay content,
+consistent with the iron-rich, reddish Konya plain soils.
+
+### Pipeline stages
+
+```
+fetch_s2    → Sentinel-2 L2A bare-soil composite (3×3 tiled fetch)
+s2_indices  → BSI, Clay Index, NDVI, NDWI, Iron Oxide
+soilgrids   → Download clay/sand/SOC from ISRIC WCS
+features    → Aggregate features to 250 m, build training matrix
+train       → Random Forest (200 trees, 5-fold CV) per target
+predict     → Apply model at 10 m, write GeoTIFFs
+catalog     → Update product catalog
+```
+
+### Run V2 pipeline
+
+```bash
+python pipelines/run_v2.py
+# or stage by stage:
+python pipelines/run_v2.py --stages fetch_s2,s2_indices
+python pipelines/run_v2.py --stages soilgrids,features,train,predict
+```
+
+### Open the report
+
+```bash
+jupyter notebook notebooks/02_v2_soil_modelling_report.ipynb
+```
+
+---
+
 ## Quickstart
 
 ### Prerequisites
@@ -126,25 +192,39 @@ jupyter notebook notebooks/01_v1_exploratory_report.ipynb
 ```
 sar-soil-characterization/
 ├── config/
-│   ├── aoi/konya.yml              # AOI bounding box + season dates
-│   └── pipelines/v1.yml           # Pipeline parameters
+│   ├── aoi/konya.yml                  # AOI bounding box + season dates
+│   └── pipelines/
+│       ├── v1.yml                     # V1 pipeline parameters
+│       └── v2.yml                     # V2 pipeline parameters
 ├── src/soilgeo/
-│   ├── acquisition/sentinel_hub.py  # Sentinel Hub API client (S1 + DEM)
-│   ├── sar/evalscripts.py           # JS evalscripts (VV+VH median, DEM)
-│   ├── terrain/derivatives.py       # gdaldem wrappers
-│   ├── hydrology/whitebox.py        # WhiteboxTools (TWI, SPI)
-│   ├── indices/sar.py               # VV/VH ratio, NDDI
+│   ├── acquisition/
+│   │   ├── sentinel_hub.py            # Sentinel Hub API client (S1 + DEM)
+│   │   ├── sentinel2.py               # S2 L2A bare-soil fetch (3×3 tiled)
+│   │   └── soilgrids.py               # SoilGrids v2.0 WCS downloader
+│   ├── sar/evalscripts.py             # JS evalscripts (S1, DEM, S2 bare-soil)
+│   ├── terrain/derivatives.py         # gdaldem wrappers
+│   ├── hydrology/whitebox.py          # WhiteboxTools (TWI, SPI, flow accum.)
+│   ├── indices/
+│   │   ├── sar.py                     # VV/VH ratio, NDDI
+│   │   └── optical.py                 # BSI, Clay Index, NDVI, NDWI, Iron Oxide
+│   ├── modelling/
+│   │   ├── features.py                # Feature matrix builder (250m agg. + 10m pred.)
+│   │   └── regression.py             # Random Forest regression + CV metrics
 │   ├── analysis/
-│   │   ├── classification.py        # k-means Surface Response Classes
-│   │   ├── statistics.py            # Kruskal-Wallis, Spearman
-│   │   └── report.py                # Stats analysis orchestrator
-│   ├── products/cog.py              # COG writer, catalog, risk index
-│   └── utils/                       # logging, config, geo helpers
-├── pipelines/run_v1.py              # CLI entry point (resumable, stage-by-stage)
+│   │   ├── classification.py          # k-means Surface Response Classes
+│   │   ├── statistics.py              # Kruskal-Wallis, Spearman
+│   │   └── report.py                  # Stats analysis orchestrator
+│   ├── products/cog.py                # COG writer, catalog, risk index
+│   └── utils/                         # logging, config, geo helpers
+├── pipelines/
+│   ├── run_v1.py                      # V1 CLI (resumable, stage-by-stage)
+│   └── run_v2.py                      # V2 CLI (resumable, stage-by-stage)
 ├── notebooks/
-│   ├── 01_v1_exploratory_report.ipynb
-│   └── visualize_v1.py
-└── tests/unit/                      # 27 unit tests
+│   ├── 01_v1_exploratory_report.ipynb # V1 analysis report
+│   ├── 02_v2_soil_modelling_report.ipynb # V2 ML report + feature importance
+│   ├── cdse_start.ipynb               # CDSE JupyterHub — cloud-native execution
+│   └── visualize_v1.py                # Interactive V1 visualizations
+└── tests/unit/                        # 27 unit tests
 ```
 
 ---
@@ -154,11 +234,14 @@ sar-soil-characterization/
 | Layer | Libraries |
 |---|---|
 | SAR / EO | Sentinel Hub Python SDK, Copernicus CDSE |
+| Optical | Sentinel-2 L2A (CDSE Processing API) |
+| Ground truth | SoilGrids v2.0 WCS (ISRIC) |
 | Terrain | GDAL / gdaldem |
 | Hydrology | WhiteboxTools |
 | Raster I/O | rasterio, rioxarray, xarray |
 | Geospatial | geopandas, shapely, pyproj |
 | ML / Stats | scikit-learn, scipy |
+| Notebooks | Jupyter, matplotlib |
 | Testing | pytest, ruff |
 
 ---
