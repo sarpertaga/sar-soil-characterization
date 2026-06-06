@@ -1,0 +1,16 @@
+data/
+*.SAFE/
+*.zip
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+.ipynb_checkpoints/
+logs/
+*.dim
+*.data/
+.DS_Store

@@ -1,0 +1,20 @@
+version: "v1"
+aoi_config: "config/aoi/konya.yml"
+
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+  log_dir: "logs"
+
+surface_response_classes:
+  n_clusters: 5
+  features: ["moisture_index", "twi", "slope"]
+  random_state: 42
+
+construction_risk:
+  enabled: true
+  weights:
+    moisture_index: 0.5
+    flow_accumulation_log: 0.3
+    low_slope_factor: 0.2
