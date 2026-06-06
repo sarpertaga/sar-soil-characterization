@@ -1,11 +1,12 @@
 name: konya
-description: "Konya Closed Basin pilot AOI — agricultural, seasonally bare, moderate micro-topography"
+description: "Konya agricultural pilot AOI — ~23x20 km, seasonally bare, drawn from agri_areas_konya.kml"
+kml: "config/aoi/agri_areas_konya.kml"
 
 bbox:
-  west: 32.20
-  south: 37.55
-  east: 33.20
-  north: 38.20
+  west: 33.20483
+  south: 37.71054
+  east: 33.41380
+  north: 37.89498
 
 crs: "EPSG:32636"
 resolution_m: 10
