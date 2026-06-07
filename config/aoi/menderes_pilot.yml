@@ -1,0 +1,24 @@
+name: menderes_pilot
+description: "~16x20 km Büyük Menderes valley pilot (Aydın) — alluvial valley floor ↔ flanking slopes; real soil-texture gradient (SoilGrids CV ~25%) for a fair V3 test"
+
+bbox:
+  west: 27.74
+  south: 37.80
+  east: 27.92
+  north: 37.98
+
+crs: "EPSG:32635"        # UTM zone 35N (Aydın)
+resolution_m: 10
+
+sentinel1:
+  orbit_direction: "ASCENDING"
+  wet_season:
+    start: "2023-01-15"
+    end: "2023-03-15"
+  dry_season:
+    start: "2023-07-15"
+    end: "2023-09-15"
+
+dem:
+  product: "COP-DEM_GLO-30"
+  buffer_deg: 0.05

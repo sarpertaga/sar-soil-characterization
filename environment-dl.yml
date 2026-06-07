@@ -1,0 +1,48 @@
+# Deep-learning environment for V3 (GeoAI).
+# Extends the core `soilgeo` stack with PyTorch, gradient boosting, MLflow,
+# Zarr, and climate-data clients. Pinned for reproducibility (V3-T7).
+#
+# GPU note (V3-T6): the conda-forge `pytorch` build below is CPU/MPS-capable
+# and works on Apple Silicon (MPS). For NVIDIA CUDA, install the matching
+# `pytorch-cuda` build per https://pytorch.org instead of the line below.
+#
+#   mamba env create -f environment-dl.yml
+#   conda activate soilgeo-dl
+#   pip install -e .
+name: soilgeo-dl
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - gdal>=3.8
+  - rasterio>=1.3
+  - rioxarray>=0.15
+  - xarray>=2024.1
+  - geopandas>=0.14
+  - shapely>=2.0
+  - pyproj>=3.6
+  - scipy>=1.12
+  - scikit-learn>=1.4
+  - matplotlib>=3.8
+  - jupyter
+  - ipykernel
+  - pytest>=8
+  - ruff>=0.4
+  # ── DL / GBM / tracking ──
+  - pytorch>=2.2
+  - xgboost>=2.0
+  - lightgbm>=4.0
+  - mlflow>=2.10
+  - zarr>=2.16
+  - dask>=2024.1
+  - einops>=0.7
+  - netcdf4>=1.6
+  - pip
+  - pip:
+      - sentinelhub>=3.10
+      - python-dotenv>=1.0
+      - whitebox>=2.3
+      - pyyaml>=6.0
+      - torchgeo>=0.5
+      - cdsapi>=0.6

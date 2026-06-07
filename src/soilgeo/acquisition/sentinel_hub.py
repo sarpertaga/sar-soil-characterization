@@ -4,10 +4,10 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from rasterio.transform import from_bounds
 from dotenv import load_dotenv
+from rasterio.transform import from_bounds
 
-from soilgeo.sar.evalscripts import S1_VV_VH_MEDIAN_DB, S1_VV_VH_SINGLE_DB, DEM_ELEVATION
+from soilgeo.sar.evalscripts import DEM_ELEVATION, S1_VV_VH_MEDIAN_DB, S1_VV_VH_SINGLE_DB
 from soilgeo.utils.logging import get_logger
 
 load_dotenv()
@@ -51,7 +51,7 @@ def build_sh_config():
 
 
 def build_sh_bbox(west: float, south: float, east: float, north: float):
-    from sentinelhub import BBox, CRS
+    from sentinelhub import CRS, BBox
     return BBox(bbox=[west, south, east, north], crs=CRS.WGS84)
 
 
@@ -123,8 +123,8 @@ def fetch_backscatter(
     vv = data[:, :, 0].astype(np.float32)
     vh = data[:, :, 1].astype(np.float32)
     mask = data[:, :, 2] == 0
-    vv[mask] = NODATA
-    vh[mask] = NODATA
+    vv[mask | ~np.isfinite(vv)] = NODATA
+    vh[mask | ~np.isfinite(vh)] = NODATA
 
     _save_tiff(
         np.stack([vv, vh], axis=2), output_path, bbox_wgs84,

@@ -13,7 +13,7 @@ A geospatial intelligence framework that characterizes soil surface conditions a
 |---|---|---|
 | **V1** | Exploratory soil characterization | ✅ Complete |
 | **V2** | Soil property modelling (clay, SOC, sand via ML) | ✅ Complete |
-| **V3** | GeoAI — time-series SAR + deep learning | 📋 Planned |
+| **V3** | GeoAI — time-series SAR + deep learning | ✅ Complete |
 | **V4** | Interactive soil intelligence platform | 📋 Planned |
 
 ---
@@ -144,6 +144,71 @@ python pipelines/run_v2.py --stages soilgrids,features,train,predict
 ```bash
 jupyter notebook notebooks/02_v2_soil_modelling_report.ipynb
 ```
+
+---
+
+## V3 — GeoAI Soil Intelligence
+
+### What it does
+
+V3 extends V2 with **multi-temporal Sentinel-1 features** (per-pixel temporal
+statistics + Quegan & Yu speckle filtering), auxiliary **S2 seasonal NDVI/NDMI**,
+terrain/hydrology, and optional **climate** (SPI-3), then trains a **GBM strong
+baseline** and a **U-Net** — tracked and compared head-to-head on a spatially
+held-out test set (spec §7). Runs via the `soilgeo-dl` environment.
+
+```
+S1 time series (≥1 yr) → Quegan&Yu filter → temporal stats (mean/std/p10/p90/amplitude/wet-dry)
+  + S2 seasonal NDVI/NDMI + terrain (slope/curvature/TWI) + climate (SPI-3)
+           ↓  build_cube → feature matrix + spatial-block groups (Zarr)
+  GBM (LightGBM, spatial-block GroupKFold)   ← strong baseline
+  U-Net (encoder-decoder, classification + regression heads, MPS/GPU)
+           ↓
+  clay/sand/soc maps · behaviour clusters · risk zones · v3_*_metrics.json
+```
+
+### Key result — pilot AOI matters, and DL is not always justified
+
+Two pilots, identical pipeline:
+
+| AOI | SoilGrids CV | GBM clay R² (spatial-CV) |
+|---|---|---|
+| Konya plain (homogeneous) | ~4 % | **−0.14** (no generalizable signal) |
+| Büyük Menderes valley (valley↔slope) | ~25 % | **+0.51** |
+
+**DL-vs-GBM verdict (Menderes clay, held-out):** GBM **0.51** vs U-Net **0.08** →
+on 250 m-labelled soil mapping the **per-pixel GBM wins**; the heavy U-Net is not
+justified (label super-resolution + per-pixel terrain signal). Top GBM feature is
+*slope* — topography is the master control on soil texture in relief.
+
+### Flood showcase — where deep learning *does* win
+
+The deliberate counterpart (`pipelines/flood_showcase.py`, **Sen1Floods11**
+hand-labeled SAR): a **dense pixel-mask** task where texture matters. Same U-Net
+code, opposite verdict:
+
+| Model | mIoU | F1 (water) |
+|---|---|---|
+| GBM (per-pixel) | 0.712 | 0.663 |
+| **U-Net (spatial)** | **0.721** | **0.694** |
+
+**Lesson:** match the model to the label resolution and the nature of the signal —
+DL wins on dense labels + spatial structure (flood), classical ML wins on
+sparse/per-pixel signal (soil).
+
+### Run V3
+
+```bash
+conda activate soilgeo-dl          # see environment-dl.yml
+KMP_DUPLICATE_LIB_OK=TRUE python pipelines/run_v3.py \
+  --config config/pipelines/v3_menderes.yml --stages all
+# flood showcase:
+KMP_DUPLICATE_LIB_OK=TRUE python pipelines/flood_showcase.py
+# interactive maps:
+KMP_DUPLICATE_LIB_OK=TRUE python pipelines/show_maps.py
+```
+
+Reports: `notebooks/03_v3_geoai_report.ipynb`, `notebooks/04_flood_unet_showcase.ipynb`
 
 ---
 

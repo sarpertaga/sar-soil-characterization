@@ -22,19 +22,21 @@ function setup() {
         mosaicking: "ORBIT"
     };
 }
+function median(arr) {
+    if (arr.length === 0) return -9999;
+    arr.sort(function(a, b) { return a - b; });
+    var m = Math.floor(arr.length / 2);
+    return arr.length % 2 ? arr[m] : (arr[m-1] + arr[m]) / 2;
+}
 function evaluatePixel(samples) {
     var vv_vals = [], vh_vals = [];
     for (var s of samples) {
         if (s.dataMask && s.VV > 0) vv_vals.push(10 * Math.log10(s.VV));
         if (s.dataMask && s.VH > 0) vh_vals.push(10 * Math.log10(s.VH));
     }
-    if (vv_vals.length === 0) return [-9999, -9999, 0];
-    vv_vals.sort((a, b) => a - b);
-    vh_vals.sort((a, b) => a - b);
-    var mid = Math.floor(vv_vals.length / 2);
-    var vv_med = vv_vals.length % 2 ? vv_vals[mid] : (vv_vals[mid-1] + vv_vals[mid]) / 2;
-    var vh_med = vh_vals.length % 2 ? vh_vals[mid] : (vh_vals[mid-1] + vh_vals[mid]) / 2;
-    return [vv_med, vh_med, 1];
+    if (vv_vals.length === 0 && vh_vals.length === 0) return [-9999, -9999, 0];
+    // Independent medians — VV and VH may have different valid sample counts.
+    return [median(vv_vals), median(vh_vals), 1];
 }
 """
 
@@ -50,6 +52,43 @@ function evaluatePixel(s) {
     var vv_db = s.VV > 0 ? 10 * Math.log10(s.VV) : -9999;
     var vh_db = s.VH > 0 ? 10 * Math.log10(s.VH) : -9999;
     return [vv_db, vh_db, s.dataMask];
+}
+"""
+
+# Sentinel-2 L2A seasonal NDVI + NDMI median composite (V3-F1 auxiliary).
+# Cloud/shadow/water/snow masked via SCL; outputs 3 bands (float32):
+#   1=NDVI median  2=NDMI median  3=valid_mask
+# NDVI = (B08-B04)/(B08+B04)   NDMI = (B08-B11)/(B08+B11)
+S2_NDVI_NDMI_SEASONAL = """
+//VERSION=3
+function setup() {
+    return {
+        input: [{
+            bands: ["B04","B08","B11","SCL","dataMask"],
+            units: ["REFLECTANCE","REFLECTANCE","REFLECTANCE","DN","DN"]
+        }],
+        output: { bands: 3, sampleType: "FLOAT32" },
+        mosaicking: "ORBIT"
+    };
+}
+
+var EXCLUDE_SCL = [0, 1, 2, 3, 6, 8, 9, 10, 11];
+
+function evaluatePixel(samples) {
+    var ndvi = [], ndmi = [];
+    for (var s of samples) {
+        if (!s.dataMask) continue;
+        if (EXCLUDE_SCL.indexOf(s.SCL) >= 0) continue;
+        ndvi.push((s.B08 - s.B04) / (s.B08 + s.B04 + 1e-9));
+        ndmi.push((s.B08 - s.B11) / (s.B08 + s.B11 + 1e-9));
+    }
+    if (ndvi.length === 0) return [-9999, -9999, 0];
+    function med(arr) {
+        arr.sort(function(a,b){return a-b;});
+        var m = Math.floor(arr.length / 2);
+        return arr.length % 2 ? arr[m] : (arr[m-1] + arr[m]) / 2;
+    }
+    return [med(ndvi), med(ndmi), 1];
 }
 """
 
