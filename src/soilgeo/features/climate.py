@@ -79,3 +79,23 @@ def spi(precip_series: np.ndarray, scale: int = 3) -> np.ndarray:
     out[valid] = z
     log.info("SPI-%d computed over %d samples", scale, vals.size)
     return out
+
+
+def spi_latest_raster(precip_stack: np.ndarray, scale: int = 3) -> np.ndarray:
+    """
+    Apply SPI-``scale`` per pixel to a monthly precipitation stack ``[T, H, W]``
+    and return the **most recent** SPI value per pixel as ``[H, W]`` float32.
+    Pixels whose series is constant/degenerate are returned as NaN.
+    """
+    T, H, W = precip_stack.shape
+    out = np.full((H, W), np.nan, dtype=np.float32)
+    for i in range(H):
+        for j in range(W):
+            series = precip_stack[:, i, j]
+            if not np.all(np.isfinite(series)) or np.nanstd(series) == 0:
+                continue
+            try:
+                out[i, j] = spi(series, scale=scale)[-1]
+            except Exception:  # noqa: BLE001 — degenerate gamma fit on a pixel
+                continue
+    return out

@@ -1,6 +1,6 @@
 import numpy as np
 
-from soilgeo.features.climate import rolling_sum, spi
+from soilgeo.features.climate import rolling_sum, spi, spi_latest_raster
 
 
 def test_rolling_sum_values_and_length():
@@ -40,3 +40,14 @@ def test_spi_handles_zeros():
     z = spi(precip, scale=3)
     valid = z[~np.isnan(z)]
     assert np.all(np.isfinite(valid))
+
+
+def test_spi_latest_raster_shape_and_constant_pixel():
+    rng = np.random.default_rng(3)
+    # [T=120 months, 2, 2]; one pixel constant -> NaN, others valid
+    stack = rng.gamma(2.0, 20.0, size=(120, 2, 2)).astype(np.float64)
+    stack[:, 0, 0] = 5.0       # constant series -> degenerate -> NaN
+    out = spi_latest_raster(stack, scale=3)
+    assert out.shape == (2, 2)
+    assert np.isnan(out[0, 0])
+    assert np.isfinite(out[1, 1])
