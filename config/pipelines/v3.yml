@@ -1,0 +1,87 @@
+version: "v3"
+aoi_config: "config/aoi/konya.yml"
+
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+  log_dir: "logs"
+
+# ── Time-series SAR (V3-F1, V3-F2) ──────────────────────────────────────────
+sentinel1_timeseries:
+  # ≥ 1 full year; single relative orbit / pass direction (DR-R2)
+  start: "2023-01-01"
+  end:   "2023-12-31"
+  step_days: 12              # S1 IW revisit
+  orbit_direction: "ASCENDING"
+  resolution_m: 10
+  # Wet/dry date indices are derived from acquisition dates at runtime:
+  wet_months: [1, 2, 3]      # Jan–Mar (post winter rains)
+  dry_months: [7, 8, 9]      # Jul–Sep
+
+multitemporal_filter:
+  method: "quegan_yu"
+  window: 7                  # local spatial mean window (px)
+
+# ── Auxiliary optical seasonality (V3-F1) ───────────────────────────────────
+sentinel2_seasonal:
+  indices: ["ndvi", "ndmi"]
+  seasons:
+    winter: { start: "2023-01-01", end: "2023-03-31" }
+    summer: { start: "2023-07-01", end: "2023-09-30" }
+  resolution_m: 10
+
+# ── Climate (V3-F3) ─────────────────────────────────────────────────────────
+climate:
+  chirps:
+    variable: "precipitation"
+    start: "2013-01-01"      # 10-yr baseline for climatology + SPI fit
+    end:   "2023-12-31"
+  era5_land:
+    variables: ["2m_temperature", "potential_evaporation"]
+    start: "2013-01-01"
+    end:   "2023-12-31"
+  spi:
+    scale_months: 3          # SPI-3
+
+# ── Strong baseline GBM (V3-F4) ─────────────────────────────────────────────
+gbm:
+  backend: "lightgbm"        # or "xgboost"
+  n_estimators: 500
+  learning_rate: 0.05
+  max_depth: -1
+  random_state: 42
+  targets: ["clay", "sand", "soc"]
+
+# ── Spatial split / tiling (V3-T1) ──────────────────────────────────────────
+tiling:
+  tile_px: 256
+  overlap_px: 32
+  block_km: 5                # spatial-block size for train/val/test grouping
+  split_ratios: [0.7, 0.15, 0.15]
+  random_state: 42
+
+# ── U-Net deep learning (V3-F5, V3-T2..T7) ──────────────────────────────────
+unet:
+  task: "both"               # "classification" | "regression" | "both"
+  n_classes: 6               # soil behaviour classes (clustered from SoilGrids)
+  regression_target: "clay"
+  base_channels: 32
+  depth: 4
+  batch_size: 8
+  epochs: 50
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  augmentation: ["hflip", "vflip", "rot90"]   # geometric only (V3-T3)
+  device: "auto"             # "cuda" | "mps" | "cpu" | "auto"
+  random_state: 42
+  max_gpu_hours: 4           # V3-T6
+
+# ── Experiment tracking (V3-F7, V3-T7) ──────────────────────────────────────
+mlflow:
+  tracking_uri: "file:./mlruns"
+  experiment_name: "v3_geoai_konya"
+
+# ── Label super-resolution evaluation (V3-T5) ───────────────────────────────
+evaluation:
+  scales_m: [250, 10]        # report at both honest (250 m) and visual (10 m)
