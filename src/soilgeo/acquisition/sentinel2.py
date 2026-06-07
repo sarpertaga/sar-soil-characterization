@@ -1,17 +1,18 @@
 """Fetch Sentinel-2 L2A bare-soil composite via Sentinel Hub CDSE."""
-import os
 from pathlib import Path
 
 import numpy as np
 import rasterio
+from dotenv import load_dotenv
 from rasterio.merge import merge
 from rasterio.transform import from_bounds
-from dotenv import load_dotenv
 
 from soilgeo.acquisition.sentinel_hub import (
-    CDSE_BASE, build_sh_bbox, build_sh_config,
+    CDSE_BASE,
+    build_sh_bbox,
+    build_sh_config,
 )
-from soilgeo.sar.evalscripts import S2_BARE_SOIL_COMPOSITE
+from soilgeo.sar.evalscripts import S2_BARE_SOIL_COMPOSITE, S2_NDVI_NDMI_SEASONAL
 from soilgeo.utils.logging import get_logger
 
 load_dotenv()
@@ -108,6 +109,73 @@ def _fetch_tile(
             dst.write(bands[:, :, i], i + 1)
 
     return tile_path
+
+
+def fetch_s2_seasonal_indices(
+    bbox_wgs84: dict,
+    time_interval: tuple[str, str],
+    output_path: Path,
+    resolution_m: int = 10,
+) -> Path:
+    """
+    Fetch a Sentinel-2 seasonal NDVI + NDMI median composite (V3-F1 auxiliary).
+
+    Cloud/shadow/water/snow observations are masked via SCL before the per-pixel
+    median is taken. Output: 2-band float32 GeoTIFF — band1=NDVI, band2=NDMI,
+    each in [-1, 1] (NODATA where no clear observation exists). Single request
+    (no tiling) — used for AOIs small enough for one Processing API call.
+    """
+    if output_path.exists():
+        log.info("Skipping S2 seasonal fetch (exists): %s", output_path.name)
+        return output_path
+
+    from sentinelhub import MimeType, SentinelHubRequest, bbox_to_dimensions
+
+    s2_col = _cdse_s2_collection()
+    config = build_sh_config()
+    sh_bbox = build_sh_bbox(**bbox_wgs84)
+    size = bbox_to_dimensions(sh_bbox, resolution=resolution_m)
+
+    log.info("S2 NDVI/NDMI [%s→%s] size=%s", time_interval[0], time_interval[1], size)
+
+    request = SentinelHubRequest(
+        evalscript=S2_NDVI_NDMI_SEASONAL,
+        input_data=[SentinelHubRequest.input_data(
+            data_collection=s2_col,
+            time_interval=time_interval,
+        )],
+        responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
+        bbox=sh_bbox,
+        size=size,
+        config=config,
+    )
+
+    raw = request.get_data()[0]  # (H, W, 3): NDVI, NDMI, mask
+    ndvi = raw[:, :, 0].astype(np.float32)
+    ndmi = raw[:, :, 1].astype(np.float32)
+    invalid = raw[:, :, 2] == 0
+    ndvi[invalid] = NODATA
+    ndmi[invalid] = NODATA
+
+    h, w = ndvi.shape
+    transform = from_bounds(
+        bbox_wgs84["west"], bbox_wgs84["south"],
+        bbox_wgs84["east"], bbox_wgs84["north"], w, h,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        output_path, "w",
+        driver="GTiff", height=h, width=w, count=2,
+        dtype="float32", crs="EPSG:4326",
+        transform=transform, nodata=NODATA, compress="deflate",
+    ) as dst:
+        dst.write(ndvi, 1)
+        dst.write(ndmi, 2)
+        dst.update_tags(band_1="NDVI_median", band_2="NDMI_median",
+                        time_start=time_interval[0], time_end=time_interval[1])
+
+    log.info("S2 seasonal indices saved: %s (%dx%d)", output_path.name, w, h)
+    return output_path
 
 
 def fetch_s2_bare_soil(

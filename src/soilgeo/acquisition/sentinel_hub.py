@@ -123,8 +123,8 @@ def fetch_backscatter(
     vv = data[:, :, 0].astype(np.float32)
     vh = data[:, :, 1].astype(np.float32)
     mask = data[:, :, 2] == 0
-    vv[mask] = NODATA
-    vh[mask] = NODATA
+    vv[mask | ~np.isfinite(vv)] = NODATA
+    vh[mask | ~np.isfinite(vh)] = NODATA
 
     _save_tiff(
         np.stack([vv, vh], axis=2), output_path, bbox_wgs84,
