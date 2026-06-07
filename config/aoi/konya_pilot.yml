@@ -1,0 +1,24 @@
+name: konya_pilot
+description: "~9x9 km pilot square inside the Konya AOI — fast end-to-end V3 validation before full-scale run"
+
+bbox:
+  west: 33.26
+  south: 37.78
+  east: 33.36
+  north: 37.86
+
+crs: "EPSG:32636"
+resolution_m: 10
+
+sentinel1:
+  orbit_direction: "ASCENDING"
+  wet_season:
+    start: "2023-01-15"
+    end: "2023-03-15"
+  dry_season:
+    start: "2023-07-15"
+    end: "2023-09-15"
+
+dem:
+  product: "COP-DEM_GLO-30"
+  buffer_deg: 0.05
