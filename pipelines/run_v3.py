@@ -415,18 +415,84 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
             norm.save(models_dir / f"unet_{target}_norm.json")
             (processed / "v3_unet_metrics.json").write_text(json.dumps([metrics], indent=2))
 
-    # ── predict / cluster / risk ────────────────────────────────────────────────
+    # Shared raster writer for prediction/cluster/risk outputs.
+    def _write_grid(arr2d, out_path, dtype="float32"):
+        import rasterio
+        with rasterio.open(ref_grid) as ref:
+            prof = ref.profile.copy()
+        prof.update(count=1, dtype=dtype, nodata=NODATA, compress="deflate")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(out_path, "w", **prof) as dst:
+            dst.write(arr2d.astype(dtype), 1)
+        log.info("Wrote %s", out_path.name)
+
+    # ── predict: best model (GBM) at 10 m → soil property maps ───────────────────
     if "predict" in stages:
         log.info("--- Stage: predict ---")
-        log.info("Apply best model at 10 m → soil_class / clay_ts / proba COGs in %s", processed)
+        import pickle
 
+        import numpy as np
+
+        from soilgeo.models.cube import assemble_cube
+        from soilgeo.models.gbm import predict_gbm
+        cube, names, _p = assemble_cube(_discover_feature_paths(), ref_grid, cube_work)
+        C, H, W = cube.shape
+        X_full = cube.reshape(C, -1).T                       # [H*W, C]
+        models_dir = processed / "v3_gbm_models"
+        for target in cfg["gbm"]["targets"]:
+            mp = models_dir / f"gbm_{target}.pkl"
+            if not mp.exists():
+                continue
+            with open(mp, "rb") as f:
+                model = pickle.load(f)
+            pred = predict_gbm(model, X_full).reshape(H, W)
+            _write_grid(pred, processed / f"{target}_10m_{aoi.name}.tif")
+
+    # ── cluster: soil-behaviour clusters from the feature cube (unsupervised) ────
     if "cluster" in stages:
         log.info("--- Stage: cluster ---")
-        log.info("k-means/GMM on time-series features → behaviour_clusters_%s.tif", aoi.name)
+        import numpy as np
+        from sklearn.cluster import MiniBatchKMeans
 
+        from soilgeo.models.cube import assemble_cube
+        cube, names, _p = assemble_cube(_discover_feature_paths(), ref_grid, cube_work)
+        C, H, W = cube.shape
+        flat = cube.reshape(C, -1).T
+        valid = np.all(flat != NODATA, axis=1)
+        labels = np.full(H * W, 255, dtype=np.float32)
+        if valid.sum() > 0:
+            Xv = (flat[valid] - flat[valid].mean(0)) / (flat[valid].std(0) + 1e-9)
+            km = MiniBatchKMeans(n_clusters=cfg["unet"]["n_classes"], random_state=42, n_init=10)
+            labels[valid] = km.fit_predict(Xv).astype(np.float32)
+        _write_grid(labels.reshape(H, W), processed / f"behaviour_clusters_{aoi.name}.tif")
+
+    # ── risk: erosion-susceptibility index (high slope + low vegetation) ─────────
     if "risk" in stages:
         log.info("--- Stage: risk ---")
-        log.info("Derive environmental risk zone layers → risk_zones_%s.tif", aoi.name)
+        import numpy as np
+        import rasterio
+
+        from soilgeo.utils.geo import resample_to_match
+
+        def _norm01(path):
+            resample_to_match(path, ref_grid, cube_work / f"_risk_{path.stem}.tif")
+            a = rasterio.open(cube_work / f"_risk_{path.stem}.tif").read(1)
+            m = a != NODATA
+            out = np.full(a.shape, NODATA, np.float32)
+            if m.any():
+                lo, hi = np.percentile(a[m], [2, 98])
+                out[m] = np.clip((a[m] - lo) / (hi - lo + 1e-9), 0, 1)
+            return out, m
+
+        slope_n, m1 = _norm01(terrain_dir / "slope.tif")
+        ndvi_path = cube_work / "s2_winter_ndvi.tif"
+        if ndvi_path.exists():
+            veg_n, m2 = _norm01(ndvi_path)
+            valid = m1 & m2
+            risk = np.where(valid, slope_n * (1 - veg_n), NODATA).astype(np.float32)
+            _write_grid(risk, processed / f"risk_zones_{aoi.name}.tif")
+        else:
+            log.warning("No winter NDVI for risk — skipping")
 
     # ── catalog ──────────────────────────────────────────────────────────────
     if "catalog" in stages:
