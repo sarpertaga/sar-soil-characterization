@@ -28,15 +28,18 @@ from soilgeo.utils.logging import get_logger
 
 load_dotenv()
 
+NODATA = -9999.0
+
 ALL_STAGES = [
     "fetch_s1_ts",       # multi-date S1 VV/VH stack (Sentinel Hub)
     "mt_filter",         # Quegan & Yu multi-temporal speckle filter (V3-F2)
     "ts_features",       # per-pixel temporal stats + wet-dry delta (V3-F1)
+    "terrain",           # DEM → slope, curvature, TWI (static V1 layers)
     "fetch_s2_seasonal", # S2 NDVI/NDMI winter+summer composites (V3-F1 aux)
+    "soilgrids",         # clay/sand/soc labels (V2 reuse)
     "fetch_climate",     # CHIRPS + ERA5-Land download (V3-F3)
     "climate_features",  # SPI-3 + climate normals (V3-F3)
-    "build_cube",        # assemble co-registered feature cube → Zarr
-    "tile",              # 256px tile inventory + spatial-block split (V3-T1)
+    "build_cube",        # assemble feature cube → Zarr + matrix + spatial-block groups
     "train_gbm",         # XGBoost/LightGBM strong baseline (V3-F4)
     "train_unet",        # U-Net classification + regression (V3-F5)
     "predict",           # apply best model at 10 m (V3-F6)
@@ -66,7 +69,12 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
 
     s1_dir = interim / "s1_timeseries"
     ts_dir = interim / "ts_features"
+    s2_dir = interim / "s2_seasonal"
+    terrain_dir = interim / "terrain"
+    hydro_dir = interim / "hydrology"
     climate_dir = interim / "climate"
+    sg_dir = interim / "soilgrids"
+    dem_path = interim / "dem" / f"dem_{aoi.name}.tif"
     cube_path = interim / "v3_cube.zarr"
 
     # ── fetch_s1_ts ──────────────────────────────────────────────────────────
@@ -134,49 +142,203 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
                     dst.write(arr.astype(np.float32), 1)
             log.info("Time-series features written for %s", band_name)
 
-    # ── fetch_climate / climate_features ───────────────────────────────────────
+    # ── terrain ────────────────────────────────────────────────────────────────
+    if "terrain" in stages:
+        log.info("--- Stage: terrain ---")
+        from soilgeo.acquisition.sentinel_hub import fetch_dem
+        from soilgeo.hydrology.whitebox import compute_twi_spi
+        from soilgeo.terrain.derivatives import compute_curvature, compute_slope
+        fetch_dem(bbox_wgs84=aoi.bbox, output_path=dem_path, resolution_m=30)
+        compute_slope(dem_path, terrain_dir / "slope.tif")
+        compute_curvature(dem_path, terrain_dir / "curvature.tif")
+        compute_twi_spi(dem_path, hydro_dir / "twi.tif", hydro_dir / "spi.tif", work_dir=hydro_dir)
+
+    # ── fetch_s2_seasonal ──────────────────────────────────────────────────────
+    if "fetch_s2_seasonal" in stages:
+        log.info("--- Stage: fetch_s2_seasonal ---")
+        from soilgeo.acquisition.sentinel2 import fetch_s2_seasonal_indices
+        s2_cfg = cfg["sentinel2_seasonal"]
+        for season, win in s2_cfg["seasons"].items():
+            fetch_s2_seasonal_indices(
+                bbox_wgs84=aoi.bbox,
+                time_interval=(win["start"], win["end"]),
+                output_path=s2_dir / f"s2_{aoi.name}_{season}_ndvi_ndmi.tif",
+                resolution_m=s2_cfg["resolution_m"],
+            )
+
+    # ── soilgrids (labels) ───────────────────────────────────────────────────
+    if "soilgrids" in stages:
+        log.info("--- Stage: soilgrids ---")
+        from soilgeo.acquisition.soilgrids import download_soilgrids
+        download_soilgrids(
+            bbox=aoi.bbox, output_dir=sg_dir,
+            properties=cfg["gbm"]["targets"], depth="0-5cm",
+        )
+
+    era5_nc = climate_dir / "era5_land_monthly.nc"
+
+    # ── fetch_climate ───────────────────────────────────────────────────────────
     if "fetch_climate" in stages:
         log.info("--- Stage: fetch_climate ---")
-        from soilgeo.acquisition.climate import download_chirps_monthly, download_era5_land
+        from soilgeo.acquisition.climate import download_era5_land
         cl = cfg["climate"]
-        download_chirps_monthly(
-            year_start=int(cl["chirps"]["start"][:4]),
-            year_end=int(cl["chirps"]["end"][:4]),
-            output_dir=climate_dir / "chirps",
-        )
         download_era5_land(
             bbox_wgs84=aoi.bbox, variables=cl["era5_land"]["variables"],
             year_start=int(cl["era5_land"]["start"][:4]),
             year_end=int(cl["era5_land"]["end"][:4]),
-            output_path=climate_dir / "era5_land_monthly.nc",
+            output_path=era5_nc,
         )
 
+    # ── climate_features: SPI-3 + temp/ET normals → rasters ──────────────────────
     if "climate_features" in stages:
         log.info("--- Stage: climate_features ---")
-        log.info("Compute SPI-3 + climate normals from downloaded grids "
-                 "(soilgeo.features.climate.spi); writes to %s", climate_dir)
+        import numpy as np
+        import rasterio
+        import xarray as xr
+        from rasterio.transform import from_bounds
 
-    # ── build_cube / tile ──────────────────────────────────────────────────────
+        from soilgeo.features.climate import spi_latest_raster
+        cl = cfg["climate"]
+        if not era5_nc.exists():
+            log.warning("ERA5 NetCDF missing (%s) — skipping climate_features", era5_nc)
+        else:
+            ds = xr.open_dataset(era5_nc)
+            # ERA5-Land monthly: dims (time/valid_time, lat, lon). Normalize names.
+            latn = "latitude" if "latitude" in ds.dims else "lat"
+            lonn = "longitude" if "longitude" in ds.dims else "lon"
+            lats, lons = ds[latn].values, ds[lonn].values
+            west, east = float(lons.min()), float(lons.max())
+            south, north = float(lats.min()), float(lats.max())
+
+            def _stack(var):
+                a = np.asarray(ds[var].values, dtype=np.float64)  # (T, H, W)
+                if lats[0] < lats[-1]:               # ensure north-up
+                    a = a[:, ::-1, :]
+                return a
+
+            precip = _stack(cl["spi"]["precip_var"])
+            spi3 = spi_latest_raster(precip, scale=cl["spi"]["scale_months"])
+            temp_norm = np.nanmean(_stack("t2m"), axis=0)
+            et_norm = np.nanmean(_stack("pev"), axis=0)
+            precip_norm = np.nanmean(precip, axis=0)
+
+            climate_dir.mkdir(parents=True, exist_ok=True)
+            H, W = spi3.shape
+            transform = from_bounds(west, south, east, north, W, H)
+            for name, arr in [("spi3", spi3), ("temp_norm", temp_norm),
+                              ("et_norm", et_norm), ("precip_norm", precip_norm)]:
+                a = np.where(np.isfinite(arr), arr, NODATA).astype(np.float32)
+                out = climate_dir / f"{name}.tif"
+                with rasterio.open(
+                    out, "w", driver="GTiff", height=H, width=W, count=1,
+                    dtype="float32", crs="EPSG:4326", transform=transform,
+                    nodata=NODATA, compress="deflate",
+                ) as dst:
+                    dst.write(a, 1)
+                log.info("Climate feature written: %s (%dx%d)", out.name, W, H)
+            ds.close()
+
+    # Reference 10 m grid + feature/label source discovery (shared by build_cube/train).
+    ref_grid = ts_dir / "vv_mean.tif"
+    cube_work = interim / "_cube_work"
+    matrix_dir = processed / "v3_features"
+
+    def _split_band(src_path: Path, band: int, out_path: Path) -> Path:
+        """Extract a single band to its own GeoTIFF (resample_to_match reads band 1)."""
+        import rasterio
+        if out_path.exists():
+            return out_path
+        with rasterio.open(src_path) as src:
+            prof = src.profile.copy()
+            prof.update(count=1)
+            data = src.read(band)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(out_path, "w", **prof) as dst:
+            dst.write(data, 1)
+        return out_path
+
+    def _discover_feature_paths() -> dict:
+        feats = {}
+        for p in sorted(ts_dir.glob("*.tif")):                  # SAR time-series stats
+            feats[f"ts_{p.stem}"] = p
+        for season in ("winter", "summer"):                     # S2 seasonal NDVI + NDMI
+            s2p = s2_dir / f"s2_{aoi.name}_{season}_ndvi_ndmi.tif"
+            if s2p.exists():
+                feats[f"s2_{season}_ndvi"] = _split_band(
+                    s2p, 1, cube_work / f"s2_{season}_ndvi.tif")
+                feats[f"s2_{season}_ndmi"] = _split_band(
+                    s2p, 2, cube_work / f"s2_{season}_ndmi.tif")
+        for name, p in [("slope", terrain_dir / "slope.tif"),
+                        ("curvature", terrain_dir / "curvature.tif"),
+                        ("twi", hydro_dir / "twi.tif")]:
+            if p.exists():
+                feats[name] = p
+        for cl_name in ("spi3", "temp_norm", "et_norm", "precip_norm"):  # optional climate
+            p = climate_dir / f"{cl_name}.tif"
+            if p.exists():
+                feats[f"clim_{cl_name}"] = p
+        return feats
+
+    # ── build_cube ───────────────────────────────────────────────────────────
     if "build_cube" in stages:
         log.info("--- Stage: build_cube ---")
-        log.info("Assemble co-registered feature cube → Zarr at %s "
-                 "(V1/V2 layers + ts_features + climate)", cube_path)
+        import numpy as np
 
-    if "tile" in stages:
-        log.info("--- Stage: tile ---")
-        from soilgeo.models.tiling import assign_blocks, make_tile_index, split_blocks
-        t = cfg["tiling"]
-        log.info("Tiling params: tile=%d overlap=%d block_km=%d ratios=%s",
-                 t["tile_px"], t["overlap_px"], t["block_km"], t["split_ratios"])
-        # Concrete H/W come from the built cube; helpers are unit-tested.
-        _ = (make_tile_index, assign_blocks, split_blocks)
+        from soilgeo.models.cube import assemble_cube, build_matrix, save_cube_zarr
+        if not ref_grid.exists():
+            log.warning("Reference grid missing (%s) — run ts_features first", ref_grid)
+        else:
+            feats = _discover_feature_paths()
+            log.info("Feature sources (%d): %s", len(feats), sorted(feats))
+            cube, names, _profile = assemble_cube(feats, ref_grid, cube_work)
+            save_cube_zarr(cube, names, cube_path)
+
+            sg = {t: sg_dir / f"sg_{t}_0_5cm_mean.tif" for t in cfg["gbm"]["targets"]}
+            sg = {t: p for t, p in sg.items() if p.exists()}
+            block_px = max(1, int(cfg["tiling"]["block_km"] * 1000 / aoi.resolution_m))
+            X, y_dict, groups, valid = build_matrix(cube, sg, ref_grid, cube_work, block_px)
+
+            matrix_dir.mkdir(parents=True, exist_ok=True)
+            np.save(matrix_dir / "X.npy", X)
+            np.save(matrix_dir / "groups.npy", groups)
+            np.save(matrix_dir / "feat_names.npy", np.array(names))
+            np.save(matrix_dir / "valid_mask.npy", valid)
+            for t, y in y_dict.items():
+                np.save(matrix_dir / f"y_{t}.npy", y)
+            log.info("Saved training matrix: X=%s targets=%s", X.shape, list(y_dict))
 
     # ── train_gbm ────────────────────────────────────────────────────────────
     if "train_gbm" in stages:
         log.info("--- Stage: train_gbm ---")
-        log.info("Train %s baseline with spatial-block GroupKFold per target %s "
-                 "(soilgeo.models.gbm.train_gbm_spatial_cv) → v3_gbm_metrics.json",
-                 cfg["gbm"]["backend"], cfg["gbm"]["targets"])
+        import numpy as np
+
+        from soilgeo.models.gbm import predict_gbm, save_metrics, train_gbm_spatial_cv
+        if not (matrix_dir / "X.npy").exists():
+            log.warning("No training matrix — run build_cube first")
+        else:
+            import pickle
+            X = np.load(matrix_dir / "X.npy")
+            groups = np.load(matrix_dir / "groups.npy")
+            names = list(np.load(matrix_dir / "feat_names.npy"))
+            g = cfg["gbm"]
+            models_dir = processed / "v3_gbm_models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            all_metrics = []
+            for target in g["targets"]:
+                yp = matrix_dir / f"y_{target}.npy"
+                if not yp.exists():
+                    continue
+                y = np.load(yp)
+                model, metrics = train_gbm_spatial_cv(
+                    X, y, groups, names, target_name=target, backend=g["backend"],
+                    n_estimators=g["n_estimators"], learning_rate=g["learning_rate"],
+                    random_state=g["random_state"],
+                )
+                with open(models_dir / f"gbm_{target}.pkl", "wb") as f:
+                    pickle.dump(model, f)
+                all_metrics.append(metrics)
+                _ = predict_gbm  # available for predict stage
+            save_metrics(all_metrics, processed / "v3_gbm_metrics.json")
 
     # ── train_unet ─────────────────────────────────────────────────────────────
     if "train_unet" in stages:
