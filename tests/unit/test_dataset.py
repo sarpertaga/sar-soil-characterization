@@ -5,6 +5,7 @@ pytest.importorskip("torch")  # soilgeo-dl env only
 
 from soilgeo.models.dataset import (  # noqa: E402
     NormStats,
+    SoilTileDataset,
     apply_augmentation,
     compute_norm_stats,
 )
@@ -68,3 +69,26 @@ def test_augmentation_applies_same_transform_to_x_and_y():
     # marker moves to top-right in both feature and label
     assert xa[0, 0, -1] == 1.0
     assert ya[0, -1] == 1.0
+
+
+def test_tile_dataset_regression_item_shapes():
+    cube = np.stack([_cube(1)[0], _cube(2)[0]]).astype(np.float32)  # [2, 32, 32]
+    label = np.full((32, 32), 30.0, np.float32)
+    stats = compute_norm_stats([cube], nodata=-9999.0)
+    tiles = [(0, 0, 16, 16), (0, 16, 16, 16)]
+    ds = SoilTileDataset(cube, label, tiles, stats, tile_size=16, task="regression")
+    assert len(ds) == 2
+    x, y = ds[0]
+    assert tuple(x.shape) == (2, 16, 16)
+    assert tuple(y.shape) == (1, 16, 16)
+
+
+def test_tile_dataset_pads_edge_tiles():
+    cube = np.stack([_cube(1)[0]]).astype(np.float32)               # [1, 32, 32]
+    label = np.full((32, 32), 5.0, np.float32)
+    stats = compute_norm_stats([cube], nodata=-9999.0)
+    tiles = [(24, 24, 8, 8)]                                        # 8x8 edge tile
+    ds = SoilTileDataset(cube, label, tiles, stats, tile_size=16, task="regression")
+    x, y = ds[0]
+    assert tuple(x.shape) == (1, 16, 16)                           # padded up to 16
+    assert tuple(y.shape) == (1, 16, 16)

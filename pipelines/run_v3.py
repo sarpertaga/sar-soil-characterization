@@ -340,13 +340,80 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
                 _ = predict_gbm  # available for predict stage
             save_metrics(all_metrics, processed / "v3_gbm_metrics.json")
 
-    # ── train_unet ─────────────────────────────────────────────────────────────
+    # ── train_unet (regression head vs GBM baseline) ────────────────────────────
     if "train_unet" in stages:
         log.info("--- Stage: train_unet ---")
-        log.info("Train U-Net (task=%s) tracked in MLflow exp '%s'; evaluate at "
-                 "scales %s (V3-T5); intended for Colab/Kaggle GPU",
-                 cfg["unet"]["task"], cfg["mlflow"]["experiment_name"],
-                 cfg["evaluation"]["scales_m"])
+        import json
+
+        import numpy as np
+        import rasterio
+
+        from soilgeo.models.cube import assemble_cube
+        from soilgeo.models.dataset import SoilTileDataset, compute_norm_stats
+        from soilgeo.models.tiling import assign_blocks, make_tile_index, split_blocks
+        from soilgeo.models.train import evaluate_regression, train_unet
+        from soilgeo.models.unet import UNet, resolve_device
+        from soilgeo.utils.geo import resample_to_match
+
+        u = cfg["unet"]
+        target = u["regression_target"]
+        if not ref_grid.exists():
+            log.warning("No reference grid — run ts_features/build_cube first")
+        else:
+            import torch
+
+            feats = _discover_feature_paths()
+            cube, names, _p = assemble_cube(feats, ref_grid, cube_work)
+            label_path = sg_dir / f"sg_{target}_0_5cm_mean.tif"
+            aligned = cube_work / f"_label_{target}.tif"
+            resample_to_match(label_path, ref_grid, aligned)
+            label_raw = rasterio.open(aligned).read(1).astype(np.float32)
+            # z-score the target for stable training; R² is scale-invariant so it
+            # stays comparable to the GBM baseline. RMSE is converted back below.
+            valid_lbl = label_raw != NODATA
+            lbl_mean = float(label_raw[valid_lbl].mean())
+            lbl_std = float(label_raw[valid_lbl].std())
+            label = np.where(valid_lbl, (label_raw - lbl_mean) / lbl_std, NODATA).astype(np.float32)
+
+            C, H, W = cube.shape
+            t_cfg = cfg["tiling"]
+            tiles = make_tile_index(H, W, tile=t_cfg["tile_px"], overlap=t_cfg["overlap_px"])
+            blocks = assign_blocks(tiles, block_km=t_cfg["block_km"], pixel_m=aoi.resolution_m)
+            split = split_blocks(blocks, tuple(t_cfg["split_ratios"]), seed=t_cfg["random_state"])
+
+            def _tiles(idxs):
+                return [tiles[i] for i in idxs]
+
+            train_tiles = _tiles(split["train"])
+            norm = compute_norm_stats([cube[:, r:r+h, c:c+w] for r, c, h, w in train_tiles])
+
+            def _ds(idxs, aug):
+                return SoilTileDataset(cube, label, _tiles(idxs), norm,
+                                       tile_size=t_cfg["tile_px"], task="regression", augment=aug)
+
+            from torch.utils.data import DataLoader
+            bs = u["batch_size"]
+            train_dl = DataLoader(_ds(split["train"], True), batch_size=bs, shuffle=True)
+            val_dl = DataLoader(_ds(split["val"], False), batch_size=bs)
+            test_dl = DataLoader(_ds(split["test"], False), batch_size=bs)
+
+            model = UNet(in_channels=C, base_channels=u["base_channels"],
+                         depth=u["depth"], n_classes=0, regression=True)
+            train_unet(model, train_dl, val_dl, task="regression", epochs=u["epochs"],
+                       lr=u["learning_rate"], weight_decay=u["weight_decay"],
+                       device=u["device"], seed=u["random_state"])
+            metrics = evaluate_regression(model, test_dl, resolve_device(u["device"]))
+            metrics["target"] = target
+            metrics["rmse"] = metrics["rmse"] * lbl_std        # back to g/kg
+            metrics["mae"] = metrics["mae"] * lbl_std
+            log.info("U-Net %s held-out R²=%.3f RMSE=%.2f g/kg (n=%d)",
+                     target, metrics["r2"], metrics["rmse"], metrics["n"])
+
+            models_dir = processed / "v3_unet_models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(model.state_dict(), models_dir / f"unet_{target}.pt")
+            norm.save(models_dir / f"unet_{target}_norm.json")
+            (processed / "v3_unet_metrics.json").write_text(json.dumps([metrics], indent=2))
 
     # ── predict / cluster / risk ────────────────────────────────────────────────
     if "predict" in stages:

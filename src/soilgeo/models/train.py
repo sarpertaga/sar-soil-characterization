@@ -79,25 +79,23 @@ def aggregate_to_scale(arr: np.ndarray, factor: int, nodata: float = NODATA) -> 
 
 # ── Training ────────────────────────────────────────────────────────────────
 
-def _make_loss(task: str, class_weights=None):
-    import torch.nn as nn
-    if task == "classification":
-        return nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
-    if task == "regression":
-        return nn.MSELoss()
-    raise ValueError(f"unknown task: {task!r}")
-
-
-def train_one_epoch(model, loader, optimizer, task: str, device, class_weights=None) -> float:
+def train_one_epoch(model, loader, optimizer, task: str, device,
+                    class_weights=None, nodata: float = NODATA) -> float:
     """
     Run one training epoch over ``loader`` (iterable of ``(x, y)`` batches).
     Returns the mean batch loss. ``task`` selects the head/loss used.
+
+    Regression uses a **nodata-masked MSE** so padded edge pixels and missing
+    labels (``nodata``) never contribute to the loss. Classification uses
+    weighted cross-entropy with ``ignore_index`` for nodata classes.
     """
-    import torch
+    import torch.nn as nn
 
     model.train()
     model.to(device)
-    loss_fn = _make_loss(task, class_weights)
+    ce = None
+    if task == "classification":
+        ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
     total, n = 0.0, 0
     for x, y in loader:
         x = x.to(device)
@@ -105,15 +103,49 @@ def train_one_epoch(model, loader, optimizer, task: str, device, class_weights=N
         optimizer.zero_grad()
         out = model(x)
         if task == "classification":
-            loss = loss_fn(out["class_logits"], y.long())
+            loss = ce(out["class_logits"], y.long())
         else:
-            loss = loss_fn(out["regression"], y.float())
+            pred = out["regression"]
+            mask = y != nodata
+            if mask.sum() == 0:
+                continue
+            loss = ((pred - y)[mask] ** 2).mean()      # nodata-masked MSE
         loss.backward()
         optimizer.step()
         total += float(loss.item())
         n += 1
-        _ = torch  # keep import explicit for readers
     return total / max(n, 1)
+
+
+def evaluate_regression(model, loader, device, nodata: float = NODATA) -> dict:
+    """
+    Run a regression U-Net over ``loader`` and compute pixel-wise R²/RMSE/MAE on
+    valid (non-nodata) pixels — the held-out-split metric comparable to the GBM
+    baseline. Returns ``{r2, rmse, mae, n}`` plus the flattened arrays for
+    dual-scale aggregation.
+    """
+    import numpy as np
+    import torch
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+    model.eval()
+    model.to(device)
+    preds, tgts = [], []
+    with torch.no_grad():
+        for x, y in loader:
+            out = model(x.to(device))["regression"].cpu().numpy()
+            yb = y.numpy()
+            m = yb != nodata
+            preds.append(out[m])
+            tgts.append(yb[m])
+    p = np.concatenate(preds)
+    t = np.concatenate(tgts)
+    return {
+        "r2": float(r2_score(t, p)),
+        "rmse": float(np.sqrt(mean_squared_error(t, p))),
+        "mae": float(mean_absolute_error(t, p)),
+        "n": int(t.size),
+    }
 
 
 def train_unet(

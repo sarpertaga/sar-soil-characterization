@@ -70,6 +70,77 @@ def compute_norm_stats(train_cubes: list[np.ndarray], nodata: float = NODATA) ->
     return NormStats(mean=mean, std=std)
 
 
+class SoilTileDataset:
+    """
+    Torch ``Dataset`` of co-registered feature/label tiles for the U-Net.
+
+    Given a ``[C, H, W]`` feature cube, a label array (``[H, W]`` for regression
+    or integer classes), and a list of tile windows ``(row, col, h, w)``, each
+    item is a normalized ``(x, y)`` pair. Features are standardized with the
+    supplied :class:`NormStats` (computed on the train split only — V3-T2).
+    During training, one random geometric augmentation is applied per item
+    (V3-T3); the same transform hits both feature and label.
+
+    Tiles smaller than the nominal size (edge tiles) are zero-padded to
+    ``tile_size`` so they batch cleanly; padded label regions use ``pad_value``.
+    """
+
+    def __init__(
+        self,
+        cube: np.ndarray,
+        label: np.ndarray,
+        tiles: list,
+        norm: NormStats,
+        tile_size: int = 256,
+        task: str = "regression",
+        augment: bool = False,
+        pad_value: float = NODATA,
+    ):
+        self.cube = norm.normalize(cube)
+        self.label = label
+        self.tiles = tiles
+        self.tile_size = tile_size
+        self.task = task
+        self.augment = augment
+        self.pad_value = pad_value
+
+    def __len__(self):
+        return len(self.tiles)
+
+    def _pad(self, arr, t):
+        import numpy as _np
+        if arr.ndim == 3:
+            c, h, w = arr.shape
+            out = _np.full((c, t, t), self.pad_value, dtype=arr.dtype)
+            out[:, :h, :w] = arr
+        else:
+            h, w = arr.shape
+            out = _np.full((t, t), self.pad_value, dtype=arr.dtype)
+            out[:h, :w] = arr
+        return out
+
+    def __getitem__(self, idx):
+        import random
+
+        import torch
+
+        r, c, h, w = self.tiles[idx]
+        t = self.tile_size
+        x = self._pad(self.cube[:, r:r + h, c:c + w], t)
+        y = self._pad(self.label[r:r + h, c:c + w], t)
+
+        x = torch.from_numpy(x).float()
+        if self.task == "regression":
+            y = torch.from_numpy(y).float().unsqueeze(0)        # [1, t, t]
+        else:
+            y = torch.from_numpy(y).long()                       # [t, t]
+
+        if self.augment:
+            op = random.choice(["none", "hflip", "vflip", "rot90"])
+            x, y = apply_augmentation(x, y, op)
+        return x, y
+
+
 def apply_augmentation(x, y, op: str):
     """
     Apply one geometric augmentation to a feature tile ``x`` (``[C,H,W]``) and
