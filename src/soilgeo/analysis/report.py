@@ -6,10 +6,10 @@ import numpy as np
 import rasterio
 
 from soilgeo.analysis.statistics import (
-    stratify_by_quantiles,
+    backscatter_stats_by_stratum,
     kruskal_wallis_test,
     spearman_correlation,
-    backscatter_stats_by_stratum,
+    stratify_by_quantiles,
 )
 from soilgeo.utils.logging import get_logger
 

@@ -1,6 +1,7 @@
 import numpy as np
 import rasterio
-from soilgeo.indices.sar import compute_vv_vh_ratio, compute_nddi
+
+from soilgeo.indices.sar import compute_nddi, compute_vv_vh_ratio
 
 
 def test_vv_vh_ratio_is_difference(tmp_path, synthetic_10m_raster):

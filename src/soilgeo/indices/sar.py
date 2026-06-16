@@ -82,6 +82,9 @@ def compute_nddi(
         dst.write(nddi.astype(np.float32), 1)
 
     valid = nddi[nddi != NODATA]
-    log.info("NDDI written: %s | range [%.3f, %.3f] mean=%.3f",
-             output_path.name, float(np.nanmin(valid)), float(np.nanmax(valid)), float(np.nanmean(valid)))
+    log.info(
+        "NDDI written: %s | range [%.3f, %.3f] mean=%.3f",
+        output_path.name,
+        float(np.nanmin(valid)), float(np.nanmax(valid)), float(np.nanmean(valid)),
+    )
     return output_path

@@ -1,11 +1,10 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import rasterio
 from pyproj import Transformer
-
 
 NODATA = -9999.0
 
@@ -37,7 +36,7 @@ def write_cog(
         dst.update_tags(ns="rio_overview", resampling="average")
 
     if provenance is not None:
-        provenance["_written_at"] = datetime.now(timezone.utc).isoformat()
+        provenance["_written_at"] = datetime.now(UTC).isoformat()
         path.with_suffix(".json").write_text(json.dumps(provenance, indent=2))
 
     return path
@@ -59,7 +58,7 @@ def resample_to_match(src_path: Path, ref_path: Path, out_path: Path) -> Path:
     """Reproject + resample src_path to exactly match ref_path grid."""
     if out_path.exists():
         return out_path
-    from rasterio.warp import reproject, Resampling
+    from rasterio.warp import Resampling, reproject
     with rasterio.open(ref_path) as ref:
         ref_profile = ref.profile.copy()
     with rasterio.open(src_path) as src:

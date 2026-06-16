@@ -11,9 +11,8 @@ from pathlib import Path
 import numpy as np
 import rasterio
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from sklearn.preprocessing import StandardScaler
 
 from soilgeo.utils.logging import get_logger
 
@@ -124,7 +123,8 @@ def predict_raster(
     if valid_vals.size > 0:
         log.info(
             "Prediction written: %s | range [%.2f, %.2f] mean=%.2f",
-            output_path.name, float(valid_vals.min()), float(valid_vals.max()), float(valid_vals.mean()),
+            output_path.name,
+            float(valid_vals.min()), float(valid_vals.max()), float(valid_vals.mean()),
         )
     else:
         log.warning("Prediction written: %s | all pixels are nodata", output_path.name)

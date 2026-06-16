@@ -1,7 +1,9 @@
-from soilgeo.acquisition.soilgrids import (
-    build_wcs_url, SOILGRIDS_PROPERTIES, VALID_DEPTHS,
-)
 import pytest
+
+from soilgeo.acquisition.soilgrids import (
+    SOILGRIDS_PROPERTIES,
+    build_wcs_url,
+)
 
 
 def test_build_wcs_url_contains_property():

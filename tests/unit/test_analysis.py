@@ -1,7 +1,11 @@
 import numpy as np
-from soilgeo.analysis.statistics import stratify_by_quantiles, kruskal_wallis_test, spearman_correlation
-from soilgeo.analysis.classification import classify_surface_response, CLASS_NAMES
 
+from soilgeo.analysis.classification import CLASS_NAMES, classify_surface_response
+from soilgeo.analysis.statistics import (
+    kruskal_wallis_test,
+    spearman_correlation,
+    stratify_by_quantiles,
+)
 
 # ── Statistics ────────────────────────────────────────────────────────────────
 

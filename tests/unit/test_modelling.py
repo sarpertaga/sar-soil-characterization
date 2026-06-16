@@ -1,11 +1,11 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 import rasterio
-from pathlib import Path
 from rasterio.transform import from_bounds
 
-from soilgeo.modelling.regression import train_soil_model, predict_raster, save_metrics
-
+from soilgeo.modelling.regression import predict_raster, save_metrics, train_soil_model
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 

@@ -84,8 +84,11 @@ def run(args):
     if "terrain" in stages:
         log.info("--- Stage: terrain ---")
         from soilgeo.terrain.derivatives import (
-            compute_slope, compute_aspect, compute_roughness,
-            compute_hillshade, compute_curvature,
+            compute_aspect,
+            compute_curvature,
+            compute_hillshade,
+            compute_roughness,
+            compute_slope,
         )
         t = interim / "terrain"
         compute_slope(dem_path, t / "slope.tif")
@@ -105,7 +108,7 @@ def run(args):
     # ── indices ─────────────────────────────────────────────────────────────
     if "indices" in stages:
         log.info("--- Stage: indices ---")
-        from soilgeo.indices.sar import compute_vv_vh_ratio, compute_nddi
+        from soilgeo.indices.sar import compute_nddi, compute_vv_vh_ratio
         s1 = interim / "s1"
         idx = interim / "indices"
 
@@ -199,7 +202,6 @@ def run(args):
         log.info("--- Stage: risk ---")
         from soilgeo.products.cog import compute_construction_risk
         from soilgeo.utils.geo import resample_to_match
-        mi_path = interim / "indices" / "moisture_index.tif"
         fa_path = interim / "hydrology" / "flow_acc.tif"
         slope_path = interim / "terrain" / "slope.tif"
         nddi_path = interim / "indices" / "nddi.tif"

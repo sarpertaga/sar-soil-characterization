@@ -1,10 +1,13 @@
 import numpy as np
-import pytest
 import rasterio
 from rasterio.transform import from_bounds
 
 from soilgeo.indices.optical import (
-    compute_bsi, compute_clay_index, compute_ndvi, compute_ndwi, compute_iron_oxide,
+    compute_bsi,
+    compute_clay_index,
+    compute_iron_oxide,
+    compute_ndvi,
+    compute_ndwi,
 )
 
 NODATA = -9999.0

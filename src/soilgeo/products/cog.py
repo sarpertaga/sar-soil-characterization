@@ -1,6 +1,6 @@
 """Product catalog and Construction Moisture Risk Index."""
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +15,7 @@ NODATA = -9999.0
 def write_product_catalog(products_dir: Path, entries: list[dict]) -> Path:
     catalog_path = products_dir / "catalog.json"
     catalog = {
-        "_generated_at": datetime.now(timezone.utc).isoformat(),
+        "_generated_at": datetime.now(UTC).isoformat(),
         "products": entries,
     }
     catalog_path.write_text(json.dumps(catalog, indent=2))
@@ -39,7 +39,9 @@ def compute_construction_risk(
         log.info("Skipping construction_risk (exists)")
         return output_path
 
-    weights = weights or {"moisture_index": 0.5, "flow_accumulation_log": 0.3, "low_slope_factor": 0.2}
+    weights = weights or {
+        "moisture_index": 0.5, "flow_accumulation_log": 0.3, "low_slope_factor": 0.2,
+    }
 
     with rasterio.open(mi_path) as src:
         mi = src.read(1).astype(np.float32)

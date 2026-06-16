@@ -22,7 +22,9 @@ def _get_wbt():
     return wbt
 
 
-def compute_flow_accumulation(dem_path: Path, output_path: Path, work_dir: Path | None = None) -> Path:
+def compute_flow_accumulation(
+    dem_path: Path, output_path: Path, work_dir: Path | None = None
+) -> Path:
     """Fill depressions then compute D8 specific contributing area."""
     if output_path.exists():
         log.info("Skipping flow_accumulation (exists)")

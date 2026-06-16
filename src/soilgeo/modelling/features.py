@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from rasterio.warp import reproject, Resampling
+from rasterio.warp import Resampling, reproject
 
 from soilgeo.utils.logging import get_logger
 

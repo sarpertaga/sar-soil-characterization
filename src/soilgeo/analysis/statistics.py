@@ -1,5 +1,5 @@
 """Stratified statistics: Kruskal-Wallis, Spearman, quantile stratification."""
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from scipy import stats

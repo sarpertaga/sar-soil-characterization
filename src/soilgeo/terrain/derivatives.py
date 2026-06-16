@@ -10,7 +10,9 @@ from soilgeo.utils.logging import get_logger
 log = get_logger(__name__)
 
 
-def _run_gdaldem(mode: str, input_path: Path, output_path: Path, extra_args: list[str] | None = None) -> Path:
+def _run_gdaldem(
+    mode: str, input_path: Path, output_path: Path, extra_args: list[str] | None = None
+) -> Path:
     if output_path.exists():
         log.info("Skipping %s (exists): %s", mode, output_path.name)
         return output_path
@@ -38,8 +40,12 @@ def compute_roughness(dem_path: Path, output_path: Path) -> Path:
     return _run_gdaldem("roughness", dem_path, output_path)
 
 
-def compute_hillshade(dem_path: Path, output_path: Path, azimuth: float = 315.0, altitude: float = 45.0) -> Path:
-    return _run_gdaldem("hillshade", dem_path, output_path, ["-az", str(azimuth), "-alt", str(altitude)])
+def compute_hillshade(
+    dem_path: Path, output_path: Path, azimuth: float = 315.0, altitude: float = 45.0
+) -> Path:
+    return _run_gdaldem(
+        "hillshade", dem_path, output_path, ["-az", str(azimuth), "-alt", str(altitude)]
+    )
 
 
 def compute_curvature(dem_path: Path, output_path: Path) -> Path:

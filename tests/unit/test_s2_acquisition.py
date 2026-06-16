@@ -1,5 +1,5 @@
+from soilgeo.acquisition.sentinel2 import S2_BAND_IDX, S2_BAND_NAMES
 from soilgeo.sar.evalscripts import S2_BARE_SOIL_COMPOSITE
-from soilgeo.acquisition.sentinel2 import S2_BAND_NAMES, S2_BAND_IDX
 
 
 def test_evalscript_excludes_cloud_scl_values():

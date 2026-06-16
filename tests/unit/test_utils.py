@@ -4,12 +4,10 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-import pytest
 
+from soilgeo.utils.config import AoiConfig, PipelineConfig, load_aoi_config, load_pipeline_config
+from soilgeo.utils.geo import bbox_to_utm, read_band, write_cog
 from soilgeo.utils.logging import get_logger
-from soilgeo.utils.config import load_aoi_config, load_pipeline_config, AoiConfig, PipelineConfig
-from soilgeo.utils.geo import write_cog, bbox_to_utm, read_band
-
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 

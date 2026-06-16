@@ -38,17 +38,6 @@ def build_wcs_url(
     map_file = SOILGRIDS_PROPERTIES[prop]["map"]
     coverage_id = f"{prop}_{depth}_mean"
 
-    params = {
-        "map": f"/map/{map_file}",
-        "SERVICE": "WCS",
-        "VERSION": "2.0.1",
-        "REQUEST": "GetCoverage",
-        "COVERAGEID": coverage_id,
-        "FORMAT": "image/tiff",
-        "GEOTIFF:OVERVIEW": "false",
-        "SUBSETTINGCRS": "http://www.opengis.net/def/crs/EPSG/0/4326",
-        "SUBSET": [f"X({west},{east})", f"Y({south},{north})"],
-    }
     # urllib.parse.urlencode doesn't handle repeated keys well; build manually
     return (
         f"{_WCS_BASE}?map=/map/{map_file}"

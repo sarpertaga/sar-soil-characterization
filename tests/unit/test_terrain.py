@@ -1,5 +1,11 @@
 import rasterio
-from soilgeo.terrain.derivatives import compute_slope, compute_aspect, compute_roughness, compute_hillshade
+
+from soilgeo.terrain.derivatives import (
+    compute_aspect,
+    compute_hillshade,
+    compute_roughness,
+    compute_slope,
+)
 
 
 def test_compute_slope_range(synthetic_dem_raster, tmp_path):

@@ -15,7 +15,6 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import rasterio
 from dotenv import load_dotenv
 
 from soilgeo.utils.config import load_aoi_config, load_config_dict
@@ -120,7 +119,7 @@ def run(args):  # noqa: C901
     # ── features ─────────────────────────────────────────────────────────────
     if "features" in stages:
         log.info("--- Stage: features ---")
-        from soilgeo.modelling.features import build_training_matrix, build_prediction_stack
+        from soilgeo.modelling.features import build_prediction_stack, build_training_matrix
         from soilgeo.utils.geo import resample_to_match
 
         # Resample curvature to match NDDI grid if needed
@@ -154,7 +153,8 @@ def run(args):  # noqa: C901
     if "train" in stages:
         log.info("--- Stage: train ---")
         import pickle
-        from soilgeo.modelling.regression import train_soil_model, save_metrics
+
+        from soilgeo.modelling.regression import save_metrics, train_soil_model
 
         matrix_dir = processed / "v2_features"
         X = np.load(matrix_dir / "X_train.npy")
@@ -187,6 +187,7 @@ def run(args):  # noqa: C901
     if "predict" in stages:
         log.info("--- Stage: predict ---")
         import pickle
+
         from soilgeo.modelling.features import build_prediction_stack
         from soilgeo.modelling.regression import predict_raster
 
