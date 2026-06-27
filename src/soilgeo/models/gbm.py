@@ -115,6 +115,83 @@ def train_gbm_spatial_cv(
     return model, metrics
 
 
+def _make_quantile_regressor(alpha, n_estimators, learning_rate, random_state):
+    """A LightGBM quantile regressor for the given pinball-loss quantile ``alpha``."""
+    from lightgbm import LGBMRegressor
+    return LGBMRegressor(
+        objective="quantile", alpha=alpha,
+        n_estimators=n_estimators, learning_rate=learning_rate,
+        random_state=random_state, n_jobs=-1, verbose=-1,
+    )
+
+
+def train_gbm_quantile_cv(
+    X: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    target_name: str,
+    quantiles: tuple[float, float, float] = (0.05, 0.5, 0.95),
+    n_splits: int = 5,
+    n_estimators: int = 500,
+    learning_rate: float = 0.05,
+    random_state: int = 42,
+) -> tuple[dict, dict]:
+    """Quantile GBM with spatial-block CV → calibrated prediction intervals.
+
+    Trains one LightGBM quantile model per quantile, using spatial-block
+    GroupKFold to produce out-of-fold predictions, then measures whether the
+    nominal central interval (``quantiles[0]``–``quantiles[-1]``) is empirically
+    calibrated on unseen blocks.
+
+    Returns:
+        models:  ``{alpha: full-data refit model}`` for per-pixel mapping.
+        metrics: empirical coverage, mean interval width, mean pinball loss.
+    """
+    lo, mid, hi = quantiles
+    nominal = round(hi - lo, 6)
+    n_groups = len(np.unique(groups))
+    n_splits = min(n_splits, n_groups)
+    gkf = GroupKFold(n_splits=n_splits)
+
+    oof = {q: np.full(len(y), np.nan) for q in quantiles}
+    for fold, (tr, va) in enumerate(gkf.split(X, y, groups)):
+        for q in quantiles:
+            reg = _make_quantile_regressor(q, n_estimators, learning_rate, random_state)
+            reg.fit(X[tr], y[tr])
+            oof[q][va] = reg.predict(X[va])
+        log.info("  quantile fold %d/%d done (%s)", fold + 1, n_splits, target_name)
+
+    inside = (y >= oof[lo]) & (y <= oof[hi])
+    coverage = float(np.mean(inside))
+    width = float(np.mean(oof[hi] - oof[lo]))
+    # pinball loss of the median predictor (lower is better)
+    err = y - oof[mid]
+    pinball = float(np.mean(np.maximum(mid * err, (mid - 1) * err)))
+
+    models = {}
+    for q in quantiles:
+        m = _make_quantile_regressor(q, n_estimators, learning_rate, random_state)
+        m.fit(X, y)
+        models[q] = m
+
+    metrics = {
+        "target": target_name,
+        "quantiles": list(quantiles),
+        "nominal_coverage": nominal,
+        "empirical_coverage": coverage,
+        "calibration_gap": float(coverage - nominal),
+        "mean_interval_width": width,
+        "median_pinball_loss": pinball,
+        "n_samples": int(len(y)),
+        "n_splits": n_splits,
+    }
+    log.info(
+        "Quantile %s — nominal %.0f%% vs empirical %.1f%% coverage, mean width %.2f",
+        target_name, nominal * 100, coverage * 100, width,
+    )
+    return models, metrics
+
+
 def predict_gbm(model: object, X_full: np.ndarray) -> np.ndarray:
     """
     Apply a trained GBM to a feature matrix. Rows containing any NODATA feature
