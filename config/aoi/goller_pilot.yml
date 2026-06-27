@@ -1,0 +1,31 @@
+name: goller_pilot
+description: "Göller Yöresi (Isparta–Burdur–Antalya ardı / batı Konya) in-situ pilot — Toros yamaçları ↔ göl havzaları ↔ alüvyal ovalar; güçlü doku gradyanı (topsoil clay %2–86). Bu AOI, 21 gerçek WoSIS toprak profilini (data/validation/wosis_goller_insitu.csv) bağımsız in-situ TEST seti olarak kapsar; eğitim yine SoilGrids etiketiyle yapılır."
+
+bbox:
+  west: 30.137
+  south: 36.753
+  east: 31.497
+  north: 38.297
+
+crs: "EPSG:32636"        # UTM zone 36N (30–36°E)
+resolution_m: 10
+
+# Bağımsız in-situ doğrulama seti (eğitimde KULLANILMAZ — sadece harici test)
+validation:
+  insitu_points: "data/validation/wosis_goller_insitu.csv"
+  source: "WoSIS latest (ISRIC), CC BY 4.0"
+  n_points: 21
+  note: "topsoil (upper_depth ≤ 30 cm); değerler clay/sand %, SOC; konumsal belirsizlik ~100 m"
+
+sentinel1:
+  orbit_direction: "ASCENDING"
+  wet_season:
+    start: "2023-01-15"
+    end: "2023-03-15"
+  dry_season:
+    start: "2023-07-15"
+    end: "2023-09-15"
+
+dem:
+  product: "COP-DEM_GLO-30"
+  buffer_deg: 0.05

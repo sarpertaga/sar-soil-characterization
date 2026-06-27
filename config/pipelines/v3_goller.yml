@@ -1,0 +1,82 @@
+# V3 config — Göller Yöresi in-situ pilot. Same schema as v3_menderes.yml.
+# This AOI is large (~120×171 km); fetch stages are PU-heavy — run after the
+# monthly Sentinel Hub quota resets. The `validate_insitu` stage tests the
+# predicted maps against 21 real WoSIS soil points (data/validation/).
+version: "v3"
+aoi_config: "config/aoi/goller_pilot.yml"
+
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim_goller"
+  processed_dir: "data/processed_goller"
+  log_dir: "logs"
+
+sentinel1_timeseries:
+  start: "2023-01-01"
+  end:   "2023-09-30"        # covers wet (Jan–Mar) + dry (Jul–Sep) for wet-dry delta
+  step_days: 12
+  orbit_direction: "ASCENDING"
+  resolution_m: 10
+  wet_months: [1, 2, 3]
+  dry_months: [7, 8, 9]
+
+multitemporal_filter:
+  method: "quegan_yu"
+  window: 7
+
+sentinel2_seasonal:
+  indices: ["ndvi", "ndmi"]
+  seasons:
+    winter: { start: "2023-01-01", end: "2023-03-31" }
+    summer: { start: "2023-07-01", end: "2023-09-30" }
+  resolution_m: 10
+
+climate:
+  source: "era5_land"
+  era5_land:
+    variables: ["2m_temperature", "potential_evaporation", "total_precipitation"]
+    start: "2014-01-01"       # 10-yr baseline for SPI gamma fit
+    end:   "2023-12-31"
+  chirps:
+    start: "2014-01-01"
+    end:   "2023-12-31"
+  spi:
+    scale_months: 3
+    precip_var: "tp"
+
+gbm:
+  backend: "lightgbm"
+  n_estimators: 300
+  learning_rate: 0.05
+  max_depth: -1
+  random_state: 42
+  targets: ["clay", "sand", "soc"]
+
+tiling:
+  tile_px: 256
+  overlap_px: 32
+  block_km: 8                 # larger blocks — large regional AOI
+  split_ratios: [0.7, 0.15, 0.15]
+  random_state: 42
+
+unet:
+  task: "both"
+  n_classes: 6
+  regression_target: "clay"
+  base_channels: 32
+  depth: 4
+  batch_size: 8
+  epochs: 50
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  augmentation: ["hflip", "vflip", "rot90"]
+  device: "auto"
+  random_state: 42
+  max_gpu_hours: 4
+
+mlflow:
+  tracking_uri: "file:./mlruns"
+  experiment_name: "v3_geoai_goller_pilot"
+
+evaluation:
+  scales_m: [250, 10]

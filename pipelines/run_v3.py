@@ -46,6 +46,7 @@ ALL_STAGES = [
     "cluster",           # behaviour clusters on time-series features (V3-F6)
     "risk",              # environmental risk zone layers (V3-F6)
     "catalog",           # update product catalog
+    "validate_insitu",   # hold-out test vs real WoSIS soil points (V4)
 ]
 
 
@@ -503,6 +504,45 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
             for p in sorted(processed.glob("*.tif"))
         ]
         write_product_catalog(processed, entries)
+
+    # ── validate_insitu: hold-out test vs real WoSIS soil observations ───────────
+    if "validate_insitu" in stages:
+        log.info("--- Stage: validate_insitu ---")
+        from soilgeo.analysis.validation import save_validation, validate_insitu
+
+        vcfg = aoi.validation
+        if not vcfg or not vcfg.get("insitu_points"):
+            log.warning("No validation.insitu_points in AOI config — skipping")
+        else:
+            csv_path = Path(vcfg["insitu_points"])
+            # SoilGrids clay/sand are g/kg; WoSIS observations are %, so scale ×0.1.
+            default_targets = [
+                {"name": "clay", "column": "clay_pct_topsoil",
+                 "pred_scale": 0.1, "baseline_scale": 0.1},
+                {"name": "sand", "column": "sand_pct_topsoil",
+                 "pred_scale": 0.1, "baseline_scale": 0.1},
+            ]
+            targets = vcfg.get("targets", default_targets)
+            results = []
+            for t in targets:
+                pred_path = processed / f"{t['name']}_10m_{aoi.name}.tif"
+                if not pred_path.exists():
+                    log.warning("No prediction map %s — run predict first", pred_path.name)
+                    continue
+                base_path = sg_dir / f"sg_{t['name']}_0_5cm_mean.tif"
+                results.append(validate_insitu(
+                    pred_path=pred_path, insitu_csv=csv_path,
+                    value_col=t["column"], target=t["name"],
+                    baseline_path=base_path if base_path.exists() else None,
+                    pred_scale=t.get("pred_scale", 1.0),
+                    baseline_scale=t.get("baseline_scale", 1.0),
+                ))
+            if results:
+                save_validation(results, processed / "v3_insitu_metrics.json")
+                for r in results:
+                    m = r["model"]
+                    log.info("in-situ %s: R²=%s RMSE=%s (n=%s)",
+                             r["target"], m["r2"], m["rmse"], m["n"])
 
     log.info("=== V3 Pipeline complete ===")
 
