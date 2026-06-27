@@ -15,6 +15,7 @@ class AoiConfig:
     resolution_m: int
     sentinel1: dict
     dem: dict
+    validation: dict | None = None  # optional in-situ validation block
 
 
 @dataclass
@@ -47,6 +48,7 @@ def load_aoi_config(path: Path) -> AoiConfig:
         resolution_m=raw["resolution_m"],
         sentinel1=raw["sentinel1"],
         dem=raw["dem"],
+        validation=raw.get("validation"),
     )
 
 
