@@ -176,20 +176,22 @@ Two pilots, identical pipeline:
 | Konya plain (homogeneous) | ~4 % | **−0.14** (no generalizable signal) |
 | Büyük Menderes valley (valley↔slope) | ~25 % | **+0.51** |
 
-**DL-vs-GBM verdict (Menderes clay, held-out):** GBM **0.51** vs U-Net **0.56**.
-An earlier run scored the U-Net at 0.08 and concluded the GBM wins — that number
-turned out to be two engineering bugs, not a modelling truth: (a) NODATA
-sentinels (−9999) leaked through normalization into the convolutions/BatchNorm,
-and (b) the final-epoch weights were evaluated instead of the best-on-validation
-checkpoint (no early stopping). With both fixed, the U-Net edges past the GBM
-even on this label-super-resolution task. The honest engineering conclusion:
-**~0.05 R² for ~5× the compute** — the strong baseline remains hard to beat, and
-whether the U-Net is worth it is a budget decision, not a foregone one. Top GBM
-feature is *slope* — topography is the master control on soil texture in relief.
+**DL-vs-GBM verdict (Menderes clay, held-out, single-geometry S1):** GBM
+**0.43** vs U-Net **0.56**. An earlier run scored the U-Net at 0.08 and
+concluded the GBM wins — that number turned out to be two engineering bugs, not
+a modelling truth: (a) NODATA sentinels (−9999) leaked through normalization
+into the convolutions/BatchNorm, and (b) the final-epoch weights were evaluated
+instead of the best-on-validation checkpoint (no early stopping). With both
+fixed, the U-Net beats the strong baseline by **+0.13 R²** on the same feature
+cube, even on this label-super-resolution task. Top GBM feature is *slope* —
+topography is the master control on soil texture in relief.
 
-Orbit-geometry control: re-fetching the S1 series ASCENDING-only left the GBM
-unchanged (clay R² 0.51) — median temporal composites are robust to mixed pass
-geometry at this AOI scale.
+Orbit-geometry control: the original series mixed ascending+descending passes
+(the config's `orbit_direction` was silently unused). Re-fetching
+ASCENDING-only dropped the GBM from 0.51 to 0.43 — the mixed series had ~2×
+observations per median window, so part of the old "baseline strength" was
+denser sampling, not cleaner physics. The single-geometry series is the
+methodologically defensible one, and both models above are compared on it.
 
 ### Flood showcase — dense labels, clearer DL win
 
