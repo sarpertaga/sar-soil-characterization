@@ -176,25 +176,36 @@ Two pilots, identical pipeline:
 | Konya plain (homogeneous) | ~4 % | **−0.14** (no generalizable signal) |
 | Büyük Menderes valley (valley↔slope) | ~25 % | **+0.51** |
 
-**DL-vs-GBM verdict (Menderes clay, held-out):** GBM **0.51** vs U-Net **0.08** →
-on 250 m-labelled soil mapping the **per-pixel GBM wins**; the heavy U-Net is not
-justified (label super-resolution + per-pixel terrain signal). Top GBM feature is
-*slope* — topography is the master control on soil texture in relief.
+**DL-vs-GBM verdict (Menderes clay, held-out):** GBM **0.51** vs U-Net **0.56**.
+An earlier run scored the U-Net at 0.08 and concluded the GBM wins — that number
+turned out to be two engineering bugs, not a modelling truth: (a) NODATA
+sentinels (−9999) leaked through normalization into the convolutions/BatchNorm,
+and (b) the final-epoch weights were evaluated instead of the best-on-validation
+checkpoint (no early stopping). With both fixed, the U-Net edges past the GBM
+even on this label-super-resolution task. The honest engineering conclusion:
+**~0.05 R² for ~5× the compute** — the strong baseline remains hard to beat, and
+whether the U-Net is worth it is a budget decision, not a foregone one. Top GBM
+feature is *slope* — topography is the master control on soil texture in relief.
 
-### Flood showcase — where deep learning *does* win
+Orbit-geometry control: re-fetching the S1 series ASCENDING-only left the GBM
+unchanged (clay R² 0.51) — median temporal composites are robust to mixed pass
+geometry at this AOI scale.
 
-The deliberate counterpart (`pipelines/flood_showcase.py`, **Sen1Floods11**
-hand-labeled SAR): a **dense pixel-mask** task where texture matters. Same U-Net
-code, opposite verdict:
+### Flood showcase — dense labels, clearer DL win
+
+The complementary task (`pipelines/flood_showcase.py`, **Sen1Floods11**
+hand-labeled SAR): a **dense pixel-mask** problem where spatial texture is the
+signal. Same U-Net code:
 
 | Model | mIoU | F1 (water) |
 |---|---|---|
 | GBM (per-pixel) | 0.712 | 0.663 |
 | **U-Net (spatial)** | **0.721** | **0.694** |
 
-**Lesson:** match the model to the label resolution and the nature of the signal —
-DL wins on dense labels + spatial structure (flood), classical ML wins on
-sparse/per-pixel signal (soil).
+**Lesson:** the margin DL buys tracks the label quality and the spatial nature
+of the signal — clear on dense hand-labeled masks (flood), narrow on coarse
+250 m super-resolved labels (soil). And before ruling against a model, make
+sure it lost fairly: the soil U-Net's first "defeat" was a data-pipeline bug.
 
 ### Run V3
 
