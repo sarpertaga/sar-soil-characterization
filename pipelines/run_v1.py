@@ -78,6 +78,7 @@ def run(args):
                 output_path=interim / "s1" / f"s1_vvvh_{aoi.name}_{season}_median.tif",
                 resolution_m=aoi.resolution_m,
                 median_composite=True,
+                orbit_direction=s1_cfg.get("orbit_direction"),
             )
 
     # ── terrain ─────────────────────────────────────────────────────────────

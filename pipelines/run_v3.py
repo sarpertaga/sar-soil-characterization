@@ -87,6 +87,7 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
             bbox_wgs84=aoi.bbox, start=ts_cfg["start"], end=ts_cfg["end"],
             output_dir=s1_dir, aoi_name=aoi.name,
             step_days=ts_cfg["step_days"], resolution_m=ts_cfg["resolution_m"],
+            orbit_direction=ts_cfg.get("orbit_direction"),
         )
 
     # ── mt_filter ─────────────────────────────────────────────────────────────
@@ -101,13 +102,19 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
         if not date_paths:
             log.warning("No S1 time-series rasters — skipping mt_filter")
         else:
+            with rasterio.open(date_paths[0]) as first:
+                base_profile = first.profile.copy()
             for band_idx, band_name in [(1, "vv"), (2, "vh")]:
-                stack = np.stack([rasterio.open(p).read(band_idx) for p in date_paths])
+                bands = []
+                for p in date_paths:
+                    with rasterio.open(p) as src:
+                        bands.append(src.read(band_idx))
+                stack = np.stack(bands)
                 filtered = linear_to_db(
                     quegan_yu_filter(db_to_linear(stack), window=mf_cfg["window"])
                 )
                 out = s1_dir / f"s1_{aoi.name}_{band_name}_mtfiltered.tif"
-                profile = rasterio.open(date_paths[0]).profile
+                profile = base_profile.copy()
                 profile.update(count=filtered.shape[0], dtype="float32")
                 with rasterio.open(out, "w", **profile) as dst:
                     dst.write(filtered)
@@ -218,7 +225,10 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
                 return a
 
             precip = _stack(cl["spi"]["precip_var"])
-            spi3 = spi_latest_raster(precip, scale=cl["spi"]["scale_months"])
+            spi3 = spi_latest_raster(
+                precip, scale=cl["spi"]["scale_months"],
+                start_month=int(cl["era5_land"]["start"][5:7]),
+            )
             temp_norm = np.nanmean(_stack("t2m"), axis=0)
             et_norm = np.nanmean(_stack("pev"), axis=0)
             precip_norm = np.nanmean(precip, axis=0)
@@ -368,12 +378,18 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
             label_path = sg_dir / f"sg_{target}_0_5cm_mean.tif"
             aligned = cube_work / f"_label_{target}.tif"
             resample_to_match(label_path, ref_grid, aligned)
-            label_raw = rasterio.open(aligned).read(1).astype(np.float32)
+            with rasterio.open(aligned) as lbl_src:
+                label_raw = lbl_src.read(1).astype(np.float32)
             # z-score the target for stable training; R² is scale-invariant so it
             # stays comparable to the GBM baseline. RMSE is converted back below.
             valid_lbl = label_raw != NODATA
             lbl_mean = float(label_raw[valid_lbl].mean())
             lbl_std = float(label_raw[valid_lbl].std())
+            if lbl_std < 1e-6:
+                raise ValueError(
+                    f"label '{target}' is constant over the AOI (std={lbl_std:.2e}) — "
+                    "nothing to regress; check the SoilGrids raster"
+                )
             label = np.where(valid_lbl, (label_raw - lbl_mean) / lbl_std, NODATA).astype(np.float32)
 
             C, H, W = cube.shape
@@ -437,6 +453,18 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
         from soilgeo.models.cube import assemble_cube
         from soilgeo.models.gbm import predict_gbm
         cube, names, _p = assemble_cube(_discover_feature_paths(), ref_grid, cube_work)
+        # The cube is re-discovered from disk at predict time; make sure it
+        # matches the feature set the models were trained on (order + count).
+        trained_names_path = matrix_dir / "feat_names.npy"
+        if trained_names_path.exists():
+            trained_names = [str(n) for n in np.load(trained_names_path)]
+            if names != trained_names:
+                raise ValueError(
+                    "feature mismatch between training and prediction:\n"
+                    f"  trained on: {trained_names}\n"
+                    f"  discovered: {names}\n"
+                    "re-run build_cube/train_gbm or restore the missing feature rasters"
+                )
         C, H, W = cube.shape
         X_full = cube.reshape(C, -1).T                       # [H*W, C]
         models_dir = processed / "v3_gbm_models"
@@ -460,7 +488,9 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
         C, H, W = cube.shape
         flat = cube.reshape(C, -1).T
         valid = np.all(flat != NODATA, axis=1)
-        labels = np.full(H * W, 255, dtype=np.float32)
+        # Invalid pixels get the raster's nodata value (NODATA), matching the
+        # nodata tag _write_grid stamps on the file — not a magic 255.
+        labels = np.full(H * W, NODATA, dtype=np.float32)
         if valid.sum() > 0:
             Xv = (flat[valid] - flat[valid].mean(0)) / (flat[valid].std(0) + 1e-9)
             km = MiniBatchKMeans(n_clusters=cfg["unet"]["n_classes"], random_state=42, n_init=10)
@@ -477,7 +507,8 @@ def run(args):  # noqa: C901 — stage dispatcher, intentionally flat
 
         def _norm01(path):
             resample_to_match(path, ref_grid, cube_work / f"_risk_{path.stem}.tif")
-            a = rasterio.open(cube_work / f"_risk_{path.stem}.tif").read(1)
+            with rasterio.open(cube_work / f"_risk_{path.stem}.tif") as src:
+                a = src.read(1)
             m = a != NODATA
             out = np.full(a.shape, NODATA, np.float32)
             if m.any():

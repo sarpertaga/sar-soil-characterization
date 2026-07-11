@@ -50,41 +50,62 @@ def fit_gamma(values: np.ndarray) -> tuple[float, float, float]:
     return float(shape), float(loc), float(scale)
 
 
-def spi(precip_series: np.ndarray, scale: int = 3) -> np.ndarray:
+def _zero_inflated_gamma_cdf(vals: np.ndarray, fit_vals: np.ndarray) -> np.ndarray:
+    """H(x) = q + (1-q)·G(x) evaluated at ``vals``, fitted on ``fit_vals``."""
+    q = float(np.mean(fit_vals == 0.0))
+    shape, loc, scale_g = fit_gamma(fit_vals)
+    return np.where(
+        vals > 0,
+        q + (1.0 - q) * gamma.cdf(vals, a=shape, loc=loc, scale=scale_g),
+        q / 2.0,  # zero precip mapped to the lower tail mass
+    )
+
+
+def spi(precip_series: np.ndarray, scale: int = 3, start_month: int = 1) -> np.ndarray:
     """
     Standardized Precipitation Index at the given month-scale (SPI-3 by
     default). Returns a z-score array the same length as the input; the first
     ``scale-1`` entries are NaN (insufficient accumulation history).
+
+    Following McKee et al. (1993), the gamma distribution is fitted **per
+    calendar month** (the month each accumulation window ends in, derived from
+    ``start_month`` = calendar month of the first sample). This makes SPI an
+    anomaly relative to that month's own climatology rather than a measure of
+    the seasonal cycle. Months with too few positive samples for a stable
+    gamma fit (< 3) fall back to the all-months fit.
     """
     precip_series = np.asarray(precip_series, dtype=np.float64)
     acc = rolling_sum(precip_series, window=scale)
 
     valid = ~np.isnan(acc)
     vals = acc[valid]
+    # Calendar month (1-12) in which each valid accumulation window ends.
+    end_months = ((start_month - 1 + np.flatnonzero(valid)) % 12) + 1
 
-    # Zero-inflation: probability of exactly-zero accumulation.
-    q = float(np.mean(vals == 0.0))
-    shape, loc, scale_g = fit_gamma(vals)
+    cdf = np.empty_like(vals)
+    for month in np.unique(end_months):
+        sel = end_months == month
+        month_vals = vals[sel]
+        fit_vals = month_vals if np.sum(month_vals > 0) >= 3 else vals
+        cdf[sel] = _zero_inflated_gamma_cdf(month_vals, fit_vals)
 
-    cdf = np.where(
-        vals > 0,
-        q + (1.0 - q) * gamma.cdf(vals, a=shape, loc=loc, scale=scale_g),
-        q / 2.0,  # zero precip mapped to the lower tail mass
-    )
     # Clip away from 0/1 so the inverse normal stays finite.
     cdf = np.clip(cdf, 1e-6, 1.0 - 1e-6)
     z = norm.ppf(cdf)
 
     out = np.full(precip_series.shape, np.nan, dtype=np.float64)
     out[valid] = z
-    log.info("SPI-%d computed over %d samples", scale, vals.size)
+    log.info("SPI-%d computed over %d samples (per-calendar-month fit)", scale, vals.size)
     return out
 
 
-def spi_latest_raster(precip_stack: np.ndarray, scale: int = 3) -> np.ndarray:
+def spi_latest_raster(
+    precip_stack: np.ndarray, scale: int = 3, start_month: int = 1
+) -> np.ndarray:
     """
     Apply SPI-``scale`` per pixel to a monthly precipitation stack ``[T, H, W]``
     and return the **most recent** SPI value per pixel as ``[H, W]`` float32.
+    ``start_month`` is the calendar month (1-12) of the stack's first layer.
     Pixels whose series is constant/degenerate are returned as NaN.
     """
     T, H, W = precip_stack.shape
@@ -95,7 +116,7 @@ def spi_latest_raster(precip_stack: np.ndarray, scale: int = 3) -> np.ndarray:
             if not np.all(np.isfinite(series)) or np.nanstd(series) == 0:
                 continue
             try:
-                out[i, j] = spi(series, scale=scale)[-1]
+                out[i, j] = spi(series, scale=scale, start_month=start_month)[-1]
             except Exception:  # noqa: BLE001 — degenerate gamma fit on a pixel
                 continue
     return out

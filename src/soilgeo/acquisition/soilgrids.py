@@ -88,8 +88,15 @@ def download_soilgrids(
         )
         log.info("Downloading SoilGrids %s %s …", prop, depth)
         try:
-            resp = requests.get(url, timeout=60, headers={"User-Agent": "soilgeo/2.0"})
+            resp = requests.get(url, timeout=120, headers={"User-Agent": "soilgeo/2.0"})
             resp.raise_for_status()
+            # The WCS can answer 200 with an XML ServiceException body; writing
+            # that as .tif poisons the pipeline downstream. TIFF magic bytes:
+            # little-endian "II*\0" or big-endian "MM\0*".
+            if resp.content[:4] not in (b"II*\x00", b"MM\x00*"):
+                raise ValueError(
+                    f"WCS returned non-TIFF content ({resp.content[:80]!r})"
+                )
             out.write_bytes(resp.content)
             log.info("  → saved: %s (%.0f KB)", out.name, len(resp.content) / 1024)
             paths[prop] = out

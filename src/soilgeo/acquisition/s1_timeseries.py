@@ -7,10 +7,10 @@ client. Each date is written as its own 2-band COG and the fetch is
 **resumable** — already-present dates are skipped — because a full year of S1
 is dozens of requests.
 
-To keep incidence-angle geometry consistent (DR-R2), callers should restrict
-the analysis to a single relative orbit / pass direction; the per-date median
-over a narrow window approximates a single pass when ``step_days`` matches the
-revisit cycle.
+To keep incidence-angle geometry consistent (DR-R2), pass
+``orbit_direction`` so every request filters to a single pass direction; the
+per-date median over a narrow window then approximates a single relative orbit
+when ``step_days`` matches the revisit cycle.
 
 Requires Sentinel Hub credentials (``SH_CLIENT_ID`` / ``SH_CLIENT_SECRET``);
 not runnable in CI.
@@ -73,6 +73,7 @@ def fetch_s1_timeseries(
     aoi_name: str,
     step_days: int = 12,
     resolution_m: int = 10,
+    orbit_direction: str | None = None,
 ) -> list[Path]:
     """
     Fetch a resumable S1 VV+VH time series. Returns the ordered list of per-date
@@ -93,6 +94,7 @@ def fetch_s1_timeseries(
                 output_path=out,
                 resolution_m=resolution_m,
                 median_composite=True,
+                orbit_direction=orbit_direction,
             )
             paths.append(out)
         except Exception as exc:  # noqa: BLE001 — keep series resumable on transient errors

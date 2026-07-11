@@ -218,10 +218,9 @@ def fetch_s2_bare_soil(
     log.info("Mosaicking %d tiles → %s", len(tile_paths), output_path.name)
     datasets = [rasterio.open(p) for p in tile_paths]
     mosaic, transform = merge(datasets, nodata=NODATA)
+    profile = datasets[0].profile.copy()
     for ds in datasets:
         ds.close()
-
-    profile = datasets[0].profile.copy()
     profile.update(
         height=mosaic.shape[1], width=mosaic.shape[2],
         transform=transform, compress="deflate",

@@ -92,3 +92,23 @@ def test_tile_dataset_pads_edge_tiles():
     x, y = ds[0]
     assert tuple(x.shape) == (1, 16, 16)                           # padded up to 16
     assert tuple(y.shape) == (1, 16, 16)
+
+
+def test_tile_dataset_never_feeds_nodata_to_the_network():
+    """Invalid pixels and edge padding must reach the model as 0, not -9999."""
+    import torch
+    cube = np.stack([_cube(1)[0]]).astype(np.float32)               # [1, 32, 32]
+    cube[0, :8, :8] = -9999.0                                       # nodata block
+    label = np.full((32, 32), 5.0, np.float32)
+    stats = compute_norm_stats([cube], nodata=-9999.0)
+    tiles = [(0, 0, 16, 16), (24, 24, 8, 8)]                        # interior + edge tile
+    ds = SoilTileDataset(cube, label, tiles, stats, tile_size=16, task="regression")
+    for i in range(len(ds)):
+        x, y = ds[i]
+        assert torch.all(torch.abs(x) < 100.0), "raw NODATA leaked into features"
+    # nodata feature pixels are exactly the neutral value 0
+    x0, _ = ds[0]
+    assert torch.all(x0[0, :8, :8] == 0.0)
+    # label padding stays NODATA so the loss mask still excludes it
+    _, y1 = ds[1]
+    assert torch.all(y1[0, 8:, 8:] == -9999.0)

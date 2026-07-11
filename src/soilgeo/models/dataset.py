@@ -96,7 +96,12 @@ class SoilTileDataset:
         augment: bool = False,
         pad_value: float = NODATA,
     ):
-        self.cube = norm.normalize(cube)
+        z = norm.normalize(cube)
+        # Invalid feature pixels must not reach the network: after
+        # standardization the raw NODATA sentinel (-9999) would dominate every
+        # convolution and poison BatchNorm statistics. Zero is the per-channel
+        # mean post-normalization, i.e. the neutral value.
+        self.cube = np.where(z == NODATA, 0.0, z).astype(np.float32)
         self.label = label
         self.tiles = tiles
         self.tile_size = tile_size
@@ -107,15 +112,15 @@ class SoilTileDataset:
     def __len__(self):
         return len(self.tiles)
 
-    def _pad(self, arr, t):
+    def _pad(self, arr, t, fill):
         import numpy as _np
         if arr.ndim == 3:
             c, h, w = arr.shape
-            out = _np.full((c, t, t), self.pad_value, dtype=arr.dtype)
+            out = _np.full((c, t, t), fill, dtype=arr.dtype)
             out[:, :h, :w] = arr
         else:
             h, w = arr.shape
-            out = _np.full((t, t), self.pad_value, dtype=arr.dtype)
+            out = _np.full((t, t), fill, dtype=arr.dtype)
             out[:h, :w] = arr
         return out
 
@@ -126,8 +131,10 @@ class SoilTileDataset:
 
         r, c, h, w = self.tiles[idx]
         t = self.tile_size
-        x = self._pad(self.cube[:, r:r + h, c:c + w], t)
-        y = self._pad(self.label[r:r + h, c:c + w], t)
+        # Features padded with 0 (neutral post-normalization); labels padded
+        # with pad_value (NODATA) so padded pixels stay masked out of the loss.
+        x = self._pad(self.cube[:, r:r + h, c:c + w], t, 0.0)
+        y = self._pad(self.label[r:r + h, c:c + w], t, self.pad_value)
 
         x = torch.from_numpy(x).float()
         if self.task == "regression":

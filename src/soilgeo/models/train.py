@@ -117,6 +117,40 @@ def train_one_epoch(model, loader, optimizer, task: str, device,
     return total / max(n, 1)
 
 
+def compute_loss(model, loader, task: str, device,
+                 class_weights=None, nodata: float = NODATA) -> float:
+    """
+    Mean batch loss over ``loader`` without gradient updates — used for the
+    validation loss that drives best-checkpoint selection and early stopping.
+    Same loss conventions as :func:`train_one_epoch`.
+    """
+    import torch
+    import torch.nn as nn
+
+    model.eval()
+    model.to(device)
+    ce = None
+    if task == "classification":
+        ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
+    total, n = 0.0, 0
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device)
+            y = y.to(device)
+            out = model(x)
+            if task == "classification":
+                loss = ce(out["class_logits"], y.long())
+            else:
+                pred = out["regression"]
+                mask = y != nodata
+                if mask.sum() == 0:
+                    continue
+                loss = ((pred - y)[mask] ** 2).mean()
+            total += float(loss.item())
+            n += 1
+    return total / max(n, 1)
+
+
 def evaluate_regression(model, loader, device, nodata: float = NODATA) -> dict:
     """
     Run a regression U-Net over ``loader`` and compute pixel-wise R²/RMSE/MAE on
@@ -161,29 +195,58 @@ def train_unet(
     class_weights=None,
     mlflow_run=None,
     seed: int = 42,
+    patience: int = 10,
 ) -> dict:
     """
     Full training loop with optional MLflow logging (V3-F7). Returns a dict of
     final metrics. Kept dependency-light so it runs identically on a laptop
     (CPU/MPS) and a Colab/Kaggle GPU. MLflow is used only if ``mlflow_run`` is
     an active run context (caller owns ``mlflow.start_run``).
+
+    Model selection: after every epoch the loss on ``val_loader`` is computed;
+    the weights with the lowest validation loss are restored at the end, and
+    training stops early after ``patience`` epochs without improvement — the
+    returned model is the best-on-validation checkpoint, never just the last
+    epoch.
     """
+    import copy
+
     import torch
 
     from soilgeo.models.unet import resolve_device
 
     torch.manual_seed(seed)
     dev = resolve_device(device)
-    log.info("Training U-Net: task=%s epochs=%d device=%s", task, epochs, dev)
+    log.info("Training U-Net: task=%s epochs=%d device=%s patience=%d",
+             task, epochs, dev, patience)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    history = []
+    history, val_history = [], []
+    best_val, best_epoch, best_state = float("inf"), -1, None
     for epoch in range(epochs):
         train_loss = train_one_epoch(model, train_loader, optimizer, task, dev, class_weights)
+        val_loss = compute_loss(model, val_loader, task, dev, class_weights)
         history.append(train_loss)
-        log.info("  epoch %d/%d  train_loss=%.4f", epoch + 1, epochs, train_loss)
+        val_history.append(val_loss)
+        log.info("  epoch %d/%d  train_loss=%.4f  val_loss=%.4f",
+                 epoch + 1, epochs, train_loss, val_loss)
         if mlflow_run is not None:
             import mlflow
             mlflow.log_metric("train_loss", train_loss, step=epoch)
+            mlflow.log_metric("val_loss", val_loss, step=epoch)
+        if val_loss < best_val:
+            best_val, best_epoch = val_loss, epoch
+            best_state = copy.deepcopy(model.state_dict())
+        elif epoch - best_epoch >= patience:
+            log.info("  early stop at epoch %d (best val_loss=%.4f @ epoch %d)",
+                     epoch + 1, best_val, best_epoch + 1)
+            break
 
-    return {"task": task, "epochs": epochs, "final_train_loss": history[-1], "history": history}
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    return {
+        "task": task, "epochs": epochs,
+        "final_train_loss": history[-1], "history": history,
+        "val_history": val_history,
+        "best_val_loss": best_val, "best_epoch": best_epoch + 1,
+    }

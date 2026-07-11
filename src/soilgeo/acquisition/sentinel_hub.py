@@ -88,10 +88,15 @@ def fetch_backscatter(
     output_path: Path,
     resolution_m: int = 10,
     median_composite: bool = True,
+    orbit_direction: str | None = None,
 ) -> Path:
     """
     Sentinel-1 IW σ⁰ median composite via CDSE Sentinel Hub.
     Output: 2-band float32 GeoTIFF — band1=VV_dB, band2=VH_dB.
+
+    ``orbit_direction`` ("ASCENDING"/"DESCENDING") restricts acquisitions to a
+    single pass direction so incidence-angle geometry stays consistent across
+    dates (DR-R2); None mixes both passes.
     """
     if output_path.exists():
         log.info("Skipping (exists): %s", output_path.name)
@@ -105,13 +110,22 @@ def fetch_backscatter(
     size = bbox_to_dimensions(sh_bbox, resolution=resolution_m)
     evalscript = S1_VV_VH_MEDIAN_DB if median_composite else S1_VV_VH_SINGLE_DB
 
-    log.info("S1 fetch [%s→%s] size=%s", time_interval[0], time_interval[1], size)
+    other_args = None
+    if orbit_direction is not None:
+        direction = orbit_direction.upper()
+        if direction not in ("ASCENDING", "DESCENDING"):
+            raise ValueError(f"invalid orbit_direction: {orbit_direction!r}")
+        other_args = {"dataFilter": {"orbitDirection": direction}}
+
+    log.info("S1 fetch [%s→%s] size=%s orbit=%s",
+             time_interval[0], time_interval[1], size, orbit_direction or "any")
 
     request = SentinelHubRequest(
         evalscript=evalscript,
         input_data=[SentinelHubRequest.input_data(
             data_collection=s1_col,
             time_interval=time_interval,
+            other_args=other_args,
         )],
         responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
         bbox=sh_bbox,

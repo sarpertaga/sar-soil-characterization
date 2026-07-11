@@ -289,7 +289,7 @@ sar-soil-characterization/
 │   ├── 02_v2_soil_modelling_report.ipynb # V2 ML report + feature importance
 │   ├── cdse_start.ipynb               # CDSE JupyterHub — cloud-native execution
 │   └── visualize_v1.py                # Interactive V1 visualizations
-└── tests/unit/                        # 27 unit tests
+└── tests/unit/                        # 113 unit tests (soilgeo-dl env; DL tests skip in base env)
 ```
 
 ---
