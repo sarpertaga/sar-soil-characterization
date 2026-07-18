@@ -1,8 +1,8 @@
 # SAR-Based Soil Characterization
 
-A geospatial intelligence framework that characterizes soil surface conditions and seasonal moisture behavior using **Sentinel-1 SAR**, **Copernicus DEM**, terrain/hydrological analysis, and machine learning — evolving from exploratory analysis (V1) to a full soil intelligence platform (V4).
+A geospatial intelligence framework that characterizes soil surface conditions and seasonal moisture behavior using **Sentinel-1 SAR**, **Copernicus DEM**, terrain/hydrological analysis, and machine learning — evolving from exploratory analysis (V1) through GeoAI modelling (V3) to independent validation (V4).
 
-**Pilot area:** Konya agricultural plain, Türkiye (~23 × 20 km)  
+**Pilot areas:** Konya plain, Büyük Menderes valley, Göller Yöresi — Türkiye  
 **Data source:** Sentinel Hub CDSE Processing API (no raw downloads)
 
 ---
@@ -14,7 +14,8 @@ A geospatial intelligence framework that characterizes soil surface conditions a
 | **V1** | Exploratory soil characterization | ✅ Complete |
 | **V2** | Soil property modelling (clay, SOC, sand via ML) | ✅ Complete |
 | **V3** | GeoAI — time-series SAR + deep learning | ✅ Complete |
-| **V4** | Interactive soil intelligence platform | 📋 Planned |
+| **V4** | Independent validation & generalization (transfer, uncertainty, in-situ) | 🔶 In progress |
+| **V5** | Interactive soil intelligence platform | 📋 Planned |
 
 ---
 
@@ -176,6 +177,10 @@ Two pilots, identical pipeline:
 | Konya plain (homogeneous) | ~4 % | **−0.14** (no generalizable signal) |
 | Büyük Menderes valley (valley↔slope) | ~25 % | **+0.51** |
 
+Per-target GBM spatial-CV on the Menderes cube (17 features, ~3.1 M samples):
+clay **0.43**, sand **0.49**, SOC **0.61** — topography (*slope*) is the top
+feature for all three.
+
 **DL-vs-GBM verdict (Menderes clay, held-out, single-geometry S1):** GBM
 **0.43** vs U-Net **0.56**. An earlier run scored the U-Net at 0.08 and
 concluded the GBM wins — that number turned out to be two engineering bugs, not
@@ -202,7 +207,9 @@ signal. Same U-Net code:
 | Model | mIoU | F1 (water) |
 |---|---|---|
 | GBM (per-pixel) | 0.712 | 0.663 |
-| **U-Net (spatial)** | **0.721** | **0.694** |
+| **U-Net (spatial)** | **0.735** | **0.712** |
+
+*(446 chips, 256×256; numbers from `data/processed_flood/flood_showcase_metrics.json`.)*
 
 **Lesson:** the margin DL buys tracks the label quality and the spatial nature
 of the signal — clear on dense hand-labeled masks (flood), narrow on coarse
@@ -222,6 +229,60 @@ KMP_DUPLICATE_LIB_OK=TRUE python pipelines/show_maps.py
 ```
 
 Reports: `notebooks/03_v3_geoai_report.ipynb`, `notebooks/04_flood_unet_showcase.ipynb`
+
+---
+
+## V4 — Independent Validation & Generalization
+
+V1–V3 are trained *and* scored against SoilGrids 250 m — a model product. A
+spatial-CV R² therefore measures agreement with another model, not with the
+ground. V4 asks the three questions a soil-mapping product actually faces, and
+reports the answers honestly — including the negative ones.
+
+### 1. Does a model transfer to another region? — **No.**
+
+A GBM trained on one region's full feature matrix, evaluated on the other
+(common 17-feature set, `soilgeo/analysis/transfer.py`):
+
+| Train → Test | R² | R² (bias-corrected) | Spearman ρ | Bias (g/kg) |
+|---|---|---|---|---|
+| Menderes → Konya | −22.7 | 0.01 | 0.06 | −59.4 |
+| Konya → Menderes | −2.9 | 0.01 | 0.04 | +123.7 |
+
+Even after removing the constant offset, out-of-region correlation is ~0: the
+learned signal is **region-specific**. In-region spatial-CV (0.43) says nothing
+about out-of-region skill — a per-region calibration (or region covariates +
+multi-region training) is a hard requirement for any scaled-up product.
+
+### 2. Are the uncertainty intervals honest? — **Slightly overconfident.**
+
+Quantile GBM (5–50–95 %) with out-of-fold spatial-block predictions
+(`v3_uncertainty_metrics.json`, Menderes):
+
+| Target | Nominal coverage | Empirical coverage | Mean interval width |
+|---|---|---|---|
+| Clay | 90 % | 85.2 % | 108.5 g/kg |
+| Sand | 90 % | 85.5 % | 137.3 g/kg |
+| SOC | 90 % | 85.3 % | 287.7 dg/kg |
+
+A ~5 pt under-coverage on unseen blocks — usable, but intervals should be
+inflated (e.g. conformal calibration) before being shown to a user.
+
+### 3. Does the model beat its own label source on real soil? — **Pending.**
+
+The `validate_insitu` stage (`soilgeo/analysis/validation.py`) scores a
+predicted map against **21 real WoSIS soil profiles** (topsoil clay/sand/SOC,
+CC BY 4.0) held out entirely from training — and scores **SoilGrids itself at
+the same points**, so the model is judged relative to its label source. The
+Göller Yöresi pilot AOI (Isparta–Burdur, strong texture gradient: clay 2–86 %)
+and the validation CSV are configured and ready
+(`config/pipelines/v3_goller.yml`, `data/validation/wosis_goller_insitu.csv`);
+the fetch stages await Sentinel Hub quota.
+
+```bash
+KMP_DUPLICATE_LIB_OK=TRUE python pipelines/run_v3.py \
+  --config config/pipelines/v3_goller.yml --stages all
+```
 
 ---
 
@@ -270,38 +331,47 @@ jupyter notebook notebooks/01_v1_exploratory_report.ipynb
 ```
 sar-soil-characterization/
 ├── config/
-│   ├── aoi/konya.yml                  # AOI bounding box + season dates
-│   └── pipelines/
-│       ├── v1.yml                     # V1 pipeline parameters
-│       └── v2.yml                     # V2 pipeline parameters
+│   ├── aoi/                           # AOI bbox + seasons (konya, menderes, göller)
+│   └── pipelines/                     # v1 / v2 / v3_{menderes,goller,pilot} params
 ├── src/soilgeo/
 │   ├── acquisition/
 │   │   ├── sentinel_hub.py            # Sentinel Hub API client (S1 + DEM)
 │   │   ├── sentinel2.py               # S2 L2A bare-soil fetch (3×3 tiled)
+│   │   ├── s1_timeseries.py           # S1 time-series fetch (per-orbit medians)
+│   │   ├── climate.py                 # ERA5-Land / CHIRPS climate series
 │   │   └── soilgrids.py               # SoilGrids v2.0 WCS downloader
-│   ├── sar/evalscripts.py             # JS evalscripts (S1, DEM, S2 bare-soil)
+│   ├── sar/
+│   │   ├── evalscripts.py             # JS evalscripts (S1, DEM, S2 bare-soil)
+│   │   └── multitemporal.py           # Quegan & Yu multi-temporal speckle filter
 │   ├── terrain/derivatives.py         # gdaldem wrappers
 │   ├── hydrology/whitebox.py          # WhiteboxTools (TWI, SPI, flow accum.)
-│   ├── indices/
-│   │   ├── sar.py                     # VV/VH ratio, NDDI
-│   │   └── optical.py                 # BSI, Clay Index, NDVI, NDWI, Iron Oxide
-│   ├── modelling/
-│   │   ├── features.py                # Feature matrix builder (250m agg. + 10m pred.)
-│   │   └── regression.py             # Random Forest regression + CV metrics
+│   ├── indices/                       # SAR (VV/VH, NDDI) + optical (BSI, NDVI, …)
+│   ├── features/                      # temporal stats + SPI-3 climate features
+│   ├── modelling/                     # V2 feature matrix + Random Forest CV
+│   ├── models/
+│   │   ├── cube.py                    # V3 feature-cube assembly (Zarr)
+│   │   ├── gbm.py                     # LightGBM spatial-CV + quantile uncertainty
+│   │   ├── unet.py / train.py         # U-Net + training loop (early stopping, MLflow)
+│   │   ├── dataset.py                 # tile dataset, train-only norm stats, augment
+│   │   └── tiling.py                  # spatial-block tiling (GroupKFold ids)
 │   ├── analysis/
 │   │   ├── classification.py          # k-means Surface Response Classes
-│   │   ├── statistics.py              # Kruskal-Wallis, Spearman
-│   │   └── report.py                  # Stats analysis orchestrator
+│   │   ├── statistics.py / report.py  # Kruskal-Wallis, Spearman orchestration
+│   │   ├── transfer.py                # V4 cross-region transferability
+│   │   └── validation.py              # V4 in-situ (WoSIS) validation vs SoilGrids
 │   ├── products/cog.py                # COG writer, catalog, risk index
 │   └── utils/                         # logging, config, geo helpers
 ├── pipelines/
-│   ├── run_v1.py                      # V1 CLI (resumable, stage-by-stage)
-│   └── run_v2.py                      # V2 CLI (resumable, stage-by-stage)
+│   ├── run_v1.py / run_v2.py / run_v3.py  # resumable stage-by-stage CLIs
+│   ├── flood_showcase.py              # Sen1Floods11 GBM-vs-U-Net showcase
+│   └── show_maps.py                   # interactive product maps
 ├── notebooks/
 │   ├── 01_v1_exploratory_report.ipynb # V1 analysis report
 │   ├── 02_v2_soil_modelling_report.ipynb # V2 ML report + feature importance
-│   ├── cdse_start.ipynb               # CDSE JupyterHub — cloud-native execution
-│   └── visualize_v1.py                # Interactive V1 visualizations
+│   ├── 03_v3_geoai_report.ipynb       # V3 DL-vs-GBM verdict + product maps
+│   ├── 04_flood_unet_showcase.ipynb   # flood showcase report
+│   └── cdse_start.ipynb               # CDSE JupyterHub — cloud-native execution
+├── data/validation/                   # WoSIS in-situ points (V4, CC BY 4.0)
 └── tests/unit/                        # 113 unit tests (soilgeo-dl env; DL tests skip in base env)
 ```
 
@@ -313,7 +383,7 @@ sar-soil-characterization/
 |---|---|
 | SAR / EO | Sentinel Hub Python SDK, Copernicus CDSE |
 | Optical | Sentinel-2 L2A (CDSE Processing API) |
-| Ground truth | SoilGrids v2.0 WCS (ISRIC) |
+| Labels / in-situ | SoilGrids v2.0 WCS (ISRIC) · WoSIS soil profiles (V4 validation) |
 | Terrain | GDAL / gdaldem |
 | Hydrology | WhiteboxTools |
 | Raster I/O | rasterio, rioxarray, xarray |
